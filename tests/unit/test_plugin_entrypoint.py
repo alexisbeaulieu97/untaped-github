@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from collections.abc import Iterator
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -16,6 +17,8 @@ from untaped.main import build_app
 from untaped.settings import reset_config_registry_for_tests
 
 from untaped_github.plugin import plugin as github_plugin
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +42,13 @@ def test_github_plugin_entry_point_is_declared() -> None:
     ]
 
     assert matches
+
+
+def test_untaped_source_tracks_core_git_source_without_stale_revision() -> None:
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    source = data["tool"]["uv"]["sources"]["untaped"]
+
+    assert source == {"git": "https://github.com/alexisbeaulieu97/untaped"}
 
 
 def test_root_app_can_register_github_plugin() -> None:

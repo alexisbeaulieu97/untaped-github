@@ -20,7 +20,7 @@ requires = ["uv_build>=0.11.8,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.sources]
-untaped = { git = "https://github.com/alexisbeaulieu97/untaped", rev = "9aa0d9e1ac29c1e3d5490eb5476592d33789807d" }
+untaped = { git = "https://github.com/alexisbeaulieu97/untaped" }
 
 [dependency-groups]
 dev = [
