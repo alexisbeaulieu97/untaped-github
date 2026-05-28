@@ -1,9 +1,7 @@
 """Shared CLI composition-root helper for building :class:`GithubClient`.
 
 Both ``whoami`` and ``search`` go through here so adding a new top-level
-command is a one-line composition-root call. See
-``untaped_awx.cli._context.AwxContext`` for the symmetric pattern in
-the AWX package.
+command is a one-line composition-root call.
 """
 
 from __future__ import annotations
