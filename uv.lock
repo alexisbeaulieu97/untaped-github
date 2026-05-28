@@ -643,7 +643,7 @@ wheels = [
 [[package]]
 name = "untaped"
 version = "0.1.0"
-source = { git = "https://github.com/alexisbeaulieu97/untaped#dc6f0da113ac46f50913892c6e214cda42ad24b8" }
+source = { git = "https://github.com/alexisbeaulieu97/untaped?rev=9aa0d9e1ac29c1e3d5490eb5476592d33789807d#9aa0d9e1ac29c1e3d5490eb5476592d33789807d" }
 dependencies = [
     { name = "filelock" },
     { name = "httpx" },
@@ -680,7 +680,7 @@ dev = [
 requires-dist = [
     { name = "pydantic", specifier = ">=2.13.3" },
     { name = "typer", specifier = ">=0.25.1" },
-    { name = "untaped", git = "https://github.com/alexisbeaulieu97/untaped" },
+    { name = "untaped", git = "https://github.com/alexisbeaulieu97/untaped?rev=9aa0d9e1ac29c1e3d5490eb5476592d33789807d" },
 ]
 
 [package.metadata.requires-dev]
