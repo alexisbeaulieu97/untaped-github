@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import typer
-
 from untaped import (
     ColumnsOption,
     ConfigError,
@@ -19,6 +18,7 @@ from untaped import (
     format_output,
     report_errors,
 )
+
 from untaped_github.cli._client import open_client
 
 # Shared across all four search subcommands. GitHub-specific (the

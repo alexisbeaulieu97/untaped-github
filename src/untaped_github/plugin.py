@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from untaped.plugins import PluginRegistry
+
 from untaped_github import app
 from untaped_github.settings import GithubSettings
 

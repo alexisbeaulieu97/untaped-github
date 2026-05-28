@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from untaped import get_config_section, get_core_settings
+
 from untaped_github.settings import GithubSettings
 
 if TYPE_CHECKING:

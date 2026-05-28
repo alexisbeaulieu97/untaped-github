@@ -1,206 +1,221 @@
-# AGENTS.md — `untaped-github`
+# AGENTS.md - `untaped-github`
 
-GitHub bounded context. Today the package ships `whoami` plus a
-`search` sub-app (`repos`, `code`, `issues`, `users`). This doc
-captures the package's contract so future commands (releases, repo
-metadata, gists, …) follow the same shape. For workspace-wide rules
-and the cross-cutting helpers index, see the
-[root `AGENTS.md`](../../AGENTS.md). For user-facing config reference,
-see [`docs/configuration.md`](../../docs/configuration.md).
+Single source of truth for this standalone plugin repo. If you change
+architecture, command behavior, settings behavior, or the development
+workflow, update this file in the same commit.
 
-## Auth model
+## Mission
+
+`untaped-github` is an `untaped` plugin. It owns the `untaped github`
+command group for authenticated user inspection and GitHub REST search
+(`repos`, `code`, `issues`, `users`). `untaped` core owns the binary,
+plugin discovery, config/profile resolution, output helpers, HTTP/TLS
+primitives, and shared errors.
+
+## Hard Rules
+
+1. **Keep `AGENTS.md` up to date.** Architecture changes and new command
+   patterns must be documented here.
+2. **Prefer `uv` commands over manual dependency edits.** Use `uv add` and
+   `uv add --group dev`; hand-edit tool config only.
+3. **Expose the plugin through the `untaped.plugins` entry point.**
+   `github = "untaped_github.plugin:plugin"` is the public integration point.
+4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
+   `infrastructure -> domain`; `application` and `infrastructure` must not
+   import each other at runtime.
+5. **Declare ports in `application/ports.py`.** Use cases depend on the
+   narrowest `Protocol`; concrete adapters satisfy ports structurally.
+6. **Use absolute imports.** `from untaped_github...` and `from untaped...`,
+   never relative imports.
+7. **Every source module has a module docstring.** Re-export `__init__.py`
+   files are exempt.
+8. **Every Typer app and every command with required args sets
+   `no_args_is_help=True`.**
+9. **stdout is data only.** Prompts, progress, and status messages go to
+   stderr via `typer.echo(..., err=True)`.
+10. **Pipe-friendly commands keep stable raw identifiers.** `GithubUser`
+    starts with `login`; repo/issue/user search rows start with `id`; code
+    search rows start with `name`.
+11. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
+    `.get_secret_value()` only inside the HTTP adapter.
+12. **Use `resolve_verify(http)` for GitHub HTTP clients.** Never hard-code
+    TLS verification policy.
+13. **Finish with verification.** Run `uv run ruff check --fix`,
+    `uv run ruff format`, `uv run mypy`, and `uv run pytest`.
+
+## Architecture
+
+```text
+src/untaped_github/
+├── __init__.py           # re-exports app
+├── plugin.py             # entry-point plugin object
+├── settings.py           # plugin-owned config model
+├── cli/                  # Typer commands; composition root
+├── application/          # use cases and ports
+├── domain/               # pure models and query value objects
+└── infrastructure/       # GitHub REST client and pagination
+```
+
+The plugin object registers `GithubSettings` as the `github` profile
+settings section and mounts the Typer app as the root `github` command.
+Plugin code reads typed settings with
+`get_config_section("github", GithubSettings)`, not a global aggregate
+`settings.github` attribute.
+
+## Auth Model
 
 GitHub uses bearer-token auth. The token is a `SecretStr` read through
-`get_config_section("github", GithubSettings)` (or
-`UNTAPED_GITHUB__TOKEN` via the env-var shorthand). The CLI composition
-root reads it once and passes the narrowed `GithubSettings` into
-`GithubClient`. Adapters never read `Settings` (the cross-cutting
-aggregate) directly — they take the narrowed sub-model — same rule that
-applies to every other plugin package.
+`get_config_section("github", GithubSettings)` or `UNTAPED_GITHUB__TOKEN`.
+The CLI composition root reads it once and passes the narrowed
+`GithubSettings` into `GithubClient`. Adapters never read the full core
+settings aggregate directly.
 
 `GithubClient.__init__` fail-fasts with `ConfigError` if the token is
-missing or whitespace-only. There is no anonymous-mode fallback —
-unauthenticated GitHub is severely rate-limited and not worth
-supporting inline.
+missing or whitespace-only. There is no anonymous-mode fallback;
+unauthenticated GitHub is rate-limited enough that supporting it inline
+would produce misleading behavior.
 
 ## Base URL: GitHub vs GHE
 
-`config.base_url` defaults to `https://api.github.com`. For GitHub
-Enterprise Server, point it at `https://<host>/api/v3`. Trailing
-slashes are stripped at client construction so URL joins are clean.
-No auto-detection — the user configures it explicitly.
+`GithubSettings.base_url` defaults to `https://api.github.com`. For GitHub
+Enterprise Server, point it at `https://<host>/api/v3`. Trailing slashes
+are stripped at client construction so URL joins are clean. No
+auto-detection: the user configures it explicitly.
 
-## Settings sub-model: package-local `GithubSettings`
+## Settings Sub-model
 
 `GithubClient.__init__` takes `GithubSettings` from
-`untaped_github.settings` directly — no separate `GithubConfig` struct
-in between. The two fields (`base_url`, `token`) have no extra adapter
-invariants beyond what `GithubSettings` already declares, so a second
-mirroring config class would be pure duplication. Symmetric with how
-`GithubClient` consumes `HttpSettings` directly for TLS configuration.
+`untaped_github.settings` directly. Do not add a mirror `GithubConfig`
+class unless the adapter needs extra invariants beyond the Pydantic schema.
+Adding a field is a two-place edit: `GithubSettings` plus the constructor
+or call site that consumes it.
 
-Adding a new field is a two-place edit (`GithubSettings` registration
-model + the `GithubClient` constructor or call site that needs it). The
-settings-schema tests in core pin loading/env-override behaviour.
+## HTTP Wiring
 
-Contrast with `AwxConfig` (`packages/untaped-awx/src/untaped_awx/infrastructure/config.py`):
-that package keeps a local struct because it adds invariants on top
-of the schema (`gt=0` on `page_size`, `frozen=True` to lock the
-struct after composition-root assembly). The principle is: keep
-the package-local config only when the adapter needs to add
-validation or invariants beyond the schema sub-model.
-
-The CLI composition root lives in `cli/_client.py::open_client`,
-which all top-level commands (`whoami`, `search`) use. Adding a
-new top-level command is a one-line `with open_client() as client:`
-away.
-
-## HTTP wiring
-
-`GithubClient` wraps `untaped.HttpClient` with three GitHub-specific
-headers:
+`GithubClient` wraps `untaped.HttpClient` with these headers:
 
 - `Accept: application/vnd.github+json`
 - `X-GitHub-Api-Version: 2022-11-28`
 - `Authorization: Bearer <token>`
 
-TLS: `verify=resolve_verify(http)` per the workspace-wide rule (root
-AGENTS.md Hard Rule 11). Don't invent your own verify resolution.
+TLS comes from `resolve_verify(http)` using core `HttpSettings`.
 
-## Rate limiting
+## Rate Limiting
 
-Authenticated GitHub gives 5000 req/hour overall and a separate 30
-req/min budget for the `/search/*` endpoints. `whoami` is one call;
-`search` paginates 100 rows per page and stops at `--limit` (default
-`30`). The 30-default keeps a casual exploratory query to a single
-round trip against the 30/min search budget; pass `--limit 1000` to
-opt into GitHub's hard search ceiling. GitHub enforces that ceiling
-on its side — the CLI accepts larger values, but the paginator stops
-once GitHub stops returning a `next` link.
-Future high-volume features should honour the `X-RateLimit-Remaining`
-/ `X-RateLimit-Reset` response headers and back off on `429 Too Many
-Requests`.
+Authenticated GitHub gives 5000 requests/hour overall and a separate
+30 requests/minute budget for `/search/*`. `whoami` is one call; `search`
+paginates 100 rows per page and stops at `--limit` (default `30`). The
+30-row default keeps casual queries to one round trip against the search
+budget. `--limit 1000` opts into GitHub's hard search ceiling. The CLI may
+accept larger values, but the paginator stops once GitHub stops returning a
+`next` link.
+
+Future high-volume features should honor `X-RateLimit-Remaining` and
+`X-RateLimit-Reset`, and back off on `429 Too Many Requests`.
 
 ## Search
 
 `search` is a Typer sub-app mounted on the root `github` app, with one
 subcommand per GitHub search endpoint:
 
-| Subcommand            | Endpoint                  | Key filters                                              |
-| --------------------- | ------------------------- | -------------------------------------------------------- |
-| `search repos`        | `/search/repositories`    | `--name`, `--language`, `--archived/--no-archived`, `--fork/--no-fork`, `--visibility`, `--sort` |
-| `search code`         | `/search/code`            | `--language`, `--filename`, `--path`, `--extension`      |
-| `search issues`       | `/search/issues`          | `--state`, `--kind issue|pr`, `--author`, `--assignee`, `--label`, `--mentions` |
-| `search users`        | `/search/users`           | `--kind user|org`, `--location`, `--language`            |
+| Subcommand     | Endpoint               | Key filters |
+| -------------- | ---------------------- | ----------- |
+| `search repos` | `/search/repositories` | `--name`, `--language`, `--archived/--no-archived`, `--fork/--no-fork`, `--visibility`, `--sort` |
+| `search code`  | `/search/code`         | `--language`, `--filename`, `--path`, `--extension` |
+| `search issues`| `/search/issues`       | `--state`, `--kind issue\|pr`, `--author`, `--assignee`, `--label`, `--mentions` |
+| `search users` | `/search/users`        | `--kind user\|org`, `--location`, `--language` |
 
-The three scoped subcommands (`repos`, `code`, `issues`) accept the
-common scope flags `--user`, `--org` (repeatable), `--repo`
-(repeatable), and `--team` (requires a single `--org`). `search users`
-does not — GitHub's user-search endpoint ignores those qualifiers, so
-exposing them on the CLI would mislead. All four subcommands share
-`--limit` and the standard `--format/-f` + `--columns/-c` from
-`untaped`.
+The three scoped subcommands (`repos`, `code`, `issues`) accept `--user`,
+`--org` (repeatable), `--repo` (repeatable), and `--team` (requires one
+`--org`). `search users` does not; GitHub's user-search endpoint ignores
+those qualifiers, so exposing them would mislead. All search commands share
+`--limit` and core `--format/-f` + `--columns/-c`.
 
-Note: `search code` does not accept `--sort` — GitHub no longer
-supports a sort parameter on code search (best-match is the only
-order).
+`search code` does not accept `--sort`; GitHub no longer supports sorting
+code search results.
 
 ### `SearchLimitOption`
 
-`cli/search_commands.py` defines a package-local
-`SearchLimitOption = Annotated[int, typer.Option("--limit", min=1, help=...)]`
-applied to all four subcommands. The default (`30`) is supplied at the
-call site (`limit: SearchLimitOption = 30`) so future tweaks land in
-one place. The alias lives here rather than in `untaped`
-(root-AGENTS convention) because the help string names GitHub's
-1000-result search cap — that's a GitHub-specific contract, not a
-workspace-wide one. Future GitHub-only option aliases (e.g. a
-`--page-size`) should land beside it for the same reason.
+`cli/search_commands.py` defines package-local `SearchLimitOption` and each
+subcommand supplies the default at the call site (`limit: SearchLimitOption =
+30`). Keep the alias local because its help text names GitHub's search cap,
+which is plugin-specific rather than core plumbing.
 
-### Default-scope rule
+### Default Scope Rule
 
-`SearchRepos`, `SearchCode`, and `SearchIssues` inject `user:@me` into
-the query whenever the user passes none of `--user`, `--org`, `--repo`,
-or `--team`. This makes the bare command ("what's mine?") the safe
-default. `SearchUsers` does not inject anything — GitHub's user-search
-endpoint ignores `user:` / `repo:` / `org:` qualifiers, so global
-results are the only sensible default.
+`SearchRepos`, `SearchCode`, and `SearchIssues` inject `user:@me` whenever
+the user passes none of `--user`, `--org`, `--repo`, or `--team`. This keeps
+the bare command scoped to the authenticated user's own work. `SearchUsers`
+does not inject anything because GitHub user search ignores those qualifiers.
 
-### Team-to-repo resolution
+### Team-to-repo Resolution
 
-There is no `team:` qualifier in GitHub search. When `--team` is passed,
-the use case calls `GET /orgs/{org}/teams/{slug}/repos` and expands the
-result into `repo:owner/name` qualifiers. `--team` without `--org`
-raises `ConfigError` (teams are scoped to an org). The use case bounds
-iteration at `MAX_TEAM_REPO_QUALIFIERS + 1` via `itertools.islice` so a
-5k-repo team doesn't drag every page over the wire just to be
-truncated. If the cap is exceeded, we keep the first N and emit a
-stderr warning via the injected `warn` callback. Raise the cap before
-increasing it past 256 without measuring; the search API also rejects
-queries with too many boolean operators.
+There is no `team:` qualifier in GitHub search. When `--team` is passed, the
+use case calls `GET /orgs/{org}/teams/{slug}/repos` and expands the result
+into `repo:owner/name` qualifiers. `--team` without `--org` raises
+`ConfigError`. The use case bounds iteration at
+`MAX_TEAM_REPO_QUALIFIERS + 1` with `itertools.islice`; if the cap is
+exceeded, keep the first N and emit a stderr warning through the injected
+`warn` callback. Raise the cap above 256 only after measuring, because the
+search API also rejects queries with too many boolean operators.
 
 ### Pagination
 
-`paginate_search` and `paginate_list` (in
-`infrastructure/pagination.py`) follow GitHub's RFC 5988 `Link` header
-(`<url>; rel="next"`) until exhausted or `--limit` is hit. Search
-payloads nest results under `items`; list payloads (e.g. team repos)
-return a raw JSON array. Two efficiency knobs:
+`paginate_search` and `paginate_list` follow GitHub RFC 5988 `Link` headers
+until exhausted or `--limit` is hit. Search payloads nest rows under `items`;
+list payloads, such as team repos, return JSON arrays.
 
-- **First-page `per_page` shrinking**: when `--limit < per_page`, the
-  first request asks for only `limit` rows so a `--limit 5` call
-  doesn't fetch a 100-row page. Subsequent pages accept the
-  server-echoed `per_page` on the `next` URL.
-- **Cycle / max-page guard**: the paginator visits at most
-  `_MAX_PAGES` (100) URLs and refuses to follow a `next` link that
-  matches the current or any previously-visited URL — defensive
-  against a malformed Link header.
+Two efficiency/defense rules are load-bearing:
+
+- When `--limit < per_page`, the first request asks only for `limit` rows.
+- The paginator visits at most `_MAX_PAGES` URLs and refuses to follow a
+  `next` link that matches the current or any previously visited URL.
 
 ## Layering
 
-Standard 4-layer DDD per root AGENTS.md "Architecture: 4-Layer DDD":
-
 - `domain/`: `GithubUser`, `RepoResult`, `CodeResult`, `IssueResult`,
-  `UserResult` plus frozen filter value objects (`RepoSearchFilters`,
-  `CodeSearchFilters`, `IssueSearchFilters`, `UserSearchFilters`) in
-  `queries.py`. Each filter knows how to render itself into the `q=`
-  string GitHub expects — pure functions, no I/O.
-- `application/`: use cases (`WhoAmI`, `SearchRepos`, `SearchCode`,
-  `SearchIssues`, `SearchUsers`) + the Protocols they consume,
-  declared in `application/ports.py` (`GithubMeService`,
-  `GithubSearchService`, `GithubTeamService`). Use cases take Protocols
-  via constructor injection and call only the methods on them. Scope
-  defaulting (`user:@me`) and team-to-repo resolution live in the
-  search use cases.
-- `infrastructure/`: `GithubClient` and `pagination.py`. Adapters
-  satisfy application Protocols structurally — no import from
-  `application/`. `GithubClient` exposes one method per endpoint and
-  delegates list/search calls to the pagination helpers.
-- `cli/`: composition root. The shared `cli/_client.open_client`
-  helper reads `settings.github` and returns a context-managed
-  `GithubClient`; every top-level command (`whoami`, `search`) uses
-  it. The `search` sub-app lives in `cli/search_commands.py` and is
-  mounted on the root app via `app.add_typer(...)`.
+  `UserResult`, and frozen filter value objects in `queries.py`. Query
+  objects render GitHub `q=` strings and do no I/O.
+- `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
+  `SearchUsers`, and their `Protocol` ports. Scope defaulting and
+  team-to-repo resolution live here.
+- `infrastructure/`: `GithubClient` and `pagination.py`. Adapters satisfy
+  application ports structurally and do not import `application`.
+- `cli/`: composition root. `cli/_client.open_client` reads the plugin config
+  and returns a context-managed `GithubClient`; top-level commands use it.
 
-## Recipe: add a new command
+## Development Workflow
 
-1. Add an HTTP method to `GithubClient` (e.g. `def list_repos(...)`).
-2. Add a domain model in `domain/` if the response shape isn't already
-   covered.
-3. Add a use case in `application/` (e.g. `ListRepos`). Add its port
-   `Protocol` to `application/ports.py` — alongside `GithubMeService`
-   if it shares the contract, or as a sibling Protocol if the new
-   command needs a different shape. The use case takes the Protocol via
-   constructor injection and calls only its declared methods.
-4. Wire the command in `cli/commands.py`. Mark `no_args_is_help=True`
-   if it has required args. Pipe-friendly data output via
-   `format_output` + `--format` / `--columns`.
-5. Test the use case with a stub satisfying the new Protocol — same
-   pattern as `tests/unit/test_whoami_use_case.py`.
+```bash
+uv sync
+uv run pre-commit install
+uv run pytest
+uv run mypy
+uv run ruff check --fix
+uv run ruff format
+uv run untaped github --help
+```
 
-## See also
+Use `pytest --no-cov` for tight local loops. Full `pytest` enforces the
+coverage gate.
 
-- [Root AGENTS.md](../../AGENTS.md) — 4-Layer DDD, Hard Rules,
-  cross-cutting helpers index.
-- [`docs/configuration.md`](../../docs/configuration.md) — user-facing
-  configuration reference.
+## Recipe: Add A GitHub Subcommand
+
+1. Write a use-case test with a stub satisfying the narrowest port.
+2. Add or narrow a port in `application/ports.py` if the command needs new
+   service behavior.
+3. Add a domain model or query value object in `domain/` when needed.
+4. Add the HTTP method to `infrastructure/github_client.py` and keep
+   pagination details in `infrastructure/pagination.py`.
+5. Wire the Typer command in `cli/commands.py` or `cli/search_commands.py`;
+   keep stdout data-only and expose `--format`/`--columns` for data output.
+6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.
+7. Run `uv run untaped github <command> --help` plus the full verification
+   commands above.
+
+## See Also
+
+- [`untaped` core](https://github.com/alexisbeaulieu97/untaped) - plugin
+  runtime, settings registry, config-file helpers, output helpers.
+- [`untaped` configuration docs](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/configuration.md)
+  - user-facing profile, config, secrets, and TLS behavior.

@@ -8,6 +8,7 @@ from typing import Any
 
 from untaped import ConfigError, HttpClient, HttpSettings
 from untaped.http import resolve_verify
+
 from untaped_github.infrastructure.pagination import paginate_list, paginate_search
 from untaped_github.settings import GithubSettings
 
