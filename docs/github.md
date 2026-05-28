@@ -2,8 +2,8 @@
 
 The GitHub plugin inspects the authenticated user and searches GitHub for
 repositories, code, issues/PRs, and users/orgs. All commands authenticate
-with the token from `github.token` and default their scope to the
-authenticated user, so the bare commands answer "what's mine?".
+with the token from `github.token`. Scoped search commands default to the
+authenticated user, so bare scoped searches answer "what's mine?".
 
 ## Setup
 
