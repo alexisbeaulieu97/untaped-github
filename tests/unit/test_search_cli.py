@@ -166,6 +166,124 @@ def test_search_repos_team_resolution(tmp_path: Path, monkeypatch: pytest.Monkey
     assert sent_q == "org:acme (repo:acme/api OR repo:acme/web)"
 
 
+def test_search_code_accepts_org_qualified_team_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    team_repos = [
+        {"full_name": "acme/api"},
+        {"full_name": "acme/web"},
+    ]
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=team_repos)
+        )
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliRunner().invoke(
+            app,
+            ["search", "code", "TODO", "--team", "acme/backend", "--format", "json"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:acme/web)"
+
+
+def test_search_issues_accepts_org_qualified_team_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    team_repos = [
+        {"full_name": "acme/api"},
+        {"full_name": "acme/web"},
+    ]
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=team_repos)
+        )
+        route = mock.get("/search/issues").mock(
+            return_value=httpx.Response(200, json={"items": []})
+        )
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "issues",
+                "--team",
+                "acme/backend",
+                "--state",
+                "open",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "(repo:acme/api OR repo:acme/web) is:open"
+
+
+def test_search_code_accepts_repeated_team_scopes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=[{"full_name": "acme/api"}])
+        )
+        mock.get("/orgs/platform/teams/ops/repos").mock(
+            return_value=httpx.Response(200, json=[{"full_name": "platform/deploy"}])
+        )
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "code",
+                "TODO",
+                "--team",
+                "acme/backend",
+                "--team",
+                "platform/ops",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:platform/deploy)"
+
+
+def test_search_code_keeps_slug_team_with_single_org(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=[{"full_name": "acme/api"}])
+        )
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "code",
+                "TODO",
+                "--org",
+                "acme",
+                "--team",
+                "backend",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO org:acme repo:acme/api"
+
+
 def test_search_code_passes_query_and_filters(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,6 +336,49 @@ def test_search_code_repeated_repos_render_or_scope(
                 "--format",
                 "json",
             ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:acme/web)"
+
+
+def test_search_code_reads_repo_scopes_from_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliRunner().invoke(
+            app,
+            ["search", "code", "TODO", "--repo-stdin", "--format", "json"],
+            input="acme/api\nacme/web\n",
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:acme/web)"
+
+
+def test_search_code_combines_explicit_and_stdin_repo_scopes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "code",
+                "TODO",
+                "--repo",
+                "acme/api",
+                "--repo-stdin",
+                "--format",
+                "json",
+            ],
+            input="acme/web\n",
         )
 
     assert result.exit_code == 0, result.output

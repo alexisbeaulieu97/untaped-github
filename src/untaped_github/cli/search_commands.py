@@ -17,9 +17,11 @@ from untaped import (
     FormatOption,
     ProfileOverrideOption,
     format_output,
+    read_identifiers,
     report_errors,
 )
 
+from untaped_github.application import TeamScope
 from untaped_github.cli._client import open_client
 
 # Shared across all four search subcommands. GitHub-specific (the
@@ -53,18 +55,30 @@ def _stderr_warn(message: str) -> None:
     typer.echo(f"warning: {message}", err=True)
 
 
-def _single_org_for_team(orgs: list[str] | None, team: str | None) -> str | None:
-    """Pick the single ``--org`` to scope a ``--team`` lookup against.
+def _parse_team_scopes(values: list[str] | None, orgs: list[str] | None) -> tuple[TeamScope, ...]:
+    """Parse repeatable ``--team`` values into explicit org/slug scopes."""
+    scopes: list[TeamScope] = []
+    for value in values or ():
+        if "/" in value:
+            org, slug = value.split("/", 1)
+            if not org or not slug:
+                raise ConfigError("--team must be ORG/SLUG or SLUG with a single --org")
+            scopes.append(TeamScope(org=org, slug=slug))
+            continue
+        if not orgs:
+            raise ConfigError("--team requires ORG/SLUG or a single --org")
+        if len(orgs) > 1:
+            raise ConfigError("--team SLUG requires a single --org (got multiple)")
+        scopes.append(TeamScope(org=orgs[0], slug=value))
+    return tuple(scopes)
 
-    Returns ``None`` when no ``--team`` was passed (team resolution is
-    a no-op). When ``--team`` IS passed but multiple ``--org`` values
-    were supplied, fail loudly rather than silently using the first.
-    """
-    if team is None:
-        return orgs[0] if orgs else None
-    if orgs and len(orgs) > 1:
-        raise ConfigError("--team requires a single --org (got multiple)")
-    return orgs[0] if orgs else None
+
+def _repo_scopes(values: list[str] | None, *, repo_stdin: bool) -> tuple[str, ...]:
+    """Merge explicit ``--repo`` values with optional stdin repo scopes."""
+    repos = list(values or ())
+    if repo_stdin:
+        repos.extend(read_identifiers([], stdin=True))
+    return tuple(repos)
 
 
 @app.command("repos", no_args_is_help=False)
@@ -74,10 +88,13 @@ def repos_command(
         None, "--user", help="user:<login>. Defaults to @me when no other scope is set."
     ),
     org: list[str] | None = typer.Option(None, "--org", help="org:<name>. Repeatable."),
-    team: str | None = typer.Option(
-        None, "--team", help="Team slug; requires a single --org. Resolves to repo: qualifiers."
+    team: list[str] | None = typer.Option(
+        None,
+        "--team",
+        help="Team ORG/SLUG, or SLUG with one --org. Repeatable.",
     ),
     repo: list[str] | None = typer.Option(None, "--repo", help="repo:owner/name. Repeatable."),
+    repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
     name: str | None = typer.Option(None, "--name", help="Match against repo name (in:name)."),
     language: str | None = typer.Option(None, "--language"),
     archived: bool | None = typer.Option(None, "--archived/--no-archived"),
@@ -100,7 +117,7 @@ def repos_command(
             raw_query=query,
             user=user,
             orgs=tuple(org or ()),
-            repos=tuple(repo or ()),
+            repos=_repo_scopes(repo, repo_stdin=repo_stdin),
             name=name,
             language=language,
             archived=archived,
@@ -111,10 +128,8 @@ def repos_command(
         )
         with open_client(profile) as client:
             use_case = SearchRepos(client, client, warn=_stderr_warn)
-            rows = [
-                r.model_dump()
-                for r in use_case(filters, org=_single_org_for_team(org, team), team=team)
-            ]
+            team_scopes = _parse_team_scopes(team, org)
+            rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         typer.echo(format_output(rows, fmt=fmt, columns=columns))
 
 
@@ -123,8 +138,11 @@ def code_command(
     query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
     user: str | None = typer.Option(None, "--user"),
     org: list[str] | None = typer.Option(None, "--org", help="Repeatable."),
-    team: str | None = typer.Option(None, "--team", help="Requires --org."),
+    team: list[str] | None = typer.Option(
+        None, "--team", help="Team ORG/SLUG, or SLUG with one --org. Repeatable."
+    ),
     repo: list[str] | None = typer.Option(None, "--repo", help="Repeatable."),
+    repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
     language: str | None = typer.Option(None, "--language"),
     filename: str | None = typer.Option(None, "--filename"),
     path: str | None = typer.Option(None, "--path"),
@@ -148,7 +166,7 @@ def code_command(
             raw_query=query,
             user=user,
             orgs=tuple(org or ()),
-            repos=tuple(repo or ()),
+            repos=_repo_scopes(repo, repo_stdin=repo_stdin),
             language=language,
             filename=filename,
             path=path,
@@ -157,10 +175,8 @@ def code_command(
         )
         with open_client(profile) as client:
             use_case = SearchCode(client, client, warn=_stderr_warn)
-            rows = [
-                r.model_dump()
-                for r in use_case(filters, org=_single_org_for_team(org, team), team=team)
-            ]
+            team_scopes = _parse_team_scopes(team, org)
+            rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         typer.echo(format_output(rows, fmt=fmt, columns=columns))
 
 
@@ -169,8 +185,11 @@ def issues_command(
     query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
     user: str | None = typer.Option(None, "--user"),
     org: list[str] | None = typer.Option(None, "--org", help="Repeatable."),
-    team: str | None = typer.Option(None, "--team", help="Requires --org."),
+    team: list[str] | None = typer.Option(
+        None, "--team", help="Team ORG/SLUG, or SLUG with one --org. Repeatable."
+    ),
     repo: list[str] | None = typer.Option(None, "--repo", help="Repeatable."),
+    repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
     state: Literal["open", "closed"] | None = typer.Option(None, "--state"),
     kind: Literal["issue", "pr"] | None = typer.Option(None, "--kind"),
     author: str | None = typer.Option(None, "--author"),
@@ -193,7 +212,7 @@ def issues_command(
             raw_query=query,
             user=user,
             orgs=tuple(org or ()),
-            repos=tuple(repo or ()),
+            repos=_repo_scopes(repo, repo_stdin=repo_stdin),
             state=state,
             kind=kind,
             author=author,
@@ -205,10 +224,8 @@ def issues_command(
         )
         with open_client(profile) as client:
             use_case = SearchIssues(client, client, warn=_stderr_warn)
-            rows = [
-                r.model_dump()
-                for r in use_case(filters, org=_single_org_for_team(org, team), team=team)
-            ]
+            team_scopes = _parse_team_scopes(team, org)
+            rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         typer.echo(format_output(rows, fmt=fmt, columns=columns))
 
 

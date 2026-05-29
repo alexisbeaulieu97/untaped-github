@@ -6,7 +6,6 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
-from untaped import ConfigError
 
 from untaped_github.application import (
     GithubSearchService,
@@ -15,6 +14,7 @@ from untaped_github.application import (
     SearchIssues,
     SearchRepos,
     SearchUsers,
+    TeamScope,
 )
 from untaped_github.application.search import MAX_TEAM_REPO_QUALIFIERS
 from untaped_github.domain import (
@@ -60,13 +60,18 @@ class _StubSearch:
 
 
 class _StubTeams:
-    def __init__(self, repos: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        repos: list[dict[str, Any]] | None = None,
+        repos_by_team: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
+    ) -> None:
         self._repos = repos or []
+        self._repos_by_team = repos_by_team or {}
         self.calls: list[tuple[str, str]] = []
 
     def list_team_repos(self, org: str, team_slug: str) -> Iterator[dict[str, Any]]:
         self.calls.append((org, team_slug))
-        return iter(self._repos)
+        return iter(self._repos_by_team.get((org, team_slug), self._repos))
 
 
 def _stub(search: _StubSearch) -> GithubSearchService:
@@ -111,7 +116,7 @@ def test_search_repos_resolves_team_into_repo_qualifiers() -> None:
     teams = _StubTeams([{"full_name": "acme/api"}, {"full_name": "acme/web"}])
     use_case = SearchRepos(_stub(search), _teams(teams))
 
-    list(use_case(RepoSearchFilters(), org="acme", team="backend"))
+    list(use_case(RepoSearchFilters(), team_scopes=(TeamScope("acme", "backend"),)))
 
     assert teams.calls == [("acme", "backend")]
     q = search.calls[0][1]
@@ -125,16 +130,41 @@ def test_search_code_resolves_team_repos_with_or_semantics() -> None:
     teams = _StubTeams([{"full_name": "acme/api"}, {"full_name": "acme/web"}])
     use_case = SearchCode(_stub(search), _teams(teams))
 
-    list(use_case(CodeSearchFilters(raw_query="TODO"), org="acme", team="backend"))
+    list(
+        use_case(
+            CodeSearchFilters(raw_query="TODO"),
+            team_scopes=(TeamScope("acme", "backend"),),
+        )
+    )
 
     assert teams.calls == [("acme", "backend")]
     assert search.calls[0][1] == "TODO (repo:acme/api OR repo:acme/web)"
 
 
-def test_search_repos_team_without_org_raises() -> None:
-    use_case = SearchRepos(_stub(_StubSearch([])), _teams(_StubTeams()))
-    with pytest.raises(ConfigError):
-        list(use_case(RepoSearchFilters(), team="backend"))
+def test_search_issues_resolves_multiple_team_scopes() -> None:
+    search = _StubSearch([])
+    teams = _StubTeams(
+        repos_by_team={
+            ("acme", "backend"): [{"full_name": "acme/api"}],
+            ("platform", "ops"): [{"full_name": "platform/deploy"}],
+        }
+    )
+    use_case = SearchIssues(_stub(search), _teams(teams))
+
+    list(
+        use_case(
+            IssueSearchFilters(state="open"),
+            team_scopes=(
+                TeamScope("acme", "backend"),
+                TeamScope("platform", "ops"),
+            ),
+        )
+    )
+
+    assert teams.calls == [("acme", "backend"), ("platform", "ops")]
+    q = search.calls[0][1]
+    assert "(repo:acme/api OR repo:platform/deploy)" in q
+    assert "is:open" in q
 
 
 def test_search_repos_truncates_oversized_team_with_warning() -> None:
@@ -144,7 +174,7 @@ def test_search_repos_truncates_oversized_team_with_warning() -> None:
     warnings: list[str] = []
     use_case = SearchRepos(_stub(search), _teams(teams), warn=warnings.append)
 
-    list(use_case(RepoSearchFilters(), org="acme", team="huge"))
+    list(use_case(RepoSearchFilters(), team_scopes=(TeamScope("acme", "huge"),)))
 
     assert any("truncating" in w for w in warnings)
     q = search.calls[0][1]
