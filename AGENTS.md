@@ -34,7 +34,8 @@ primitives, and shared errors.
 9. **stdout is data only.** Prompts, progress, and status messages go to
    stderr via `typer.echo(..., err=True)`.
 10. **Pipe-friendly commands keep stable raw identifiers.** `GithubUser`
-    starts with `login`; repo/issue/user search rows start with `id`; code
+    starts with `login`; repo search rows start with `full_name`; issue
+    search rows start with `repo`; user search rows start with `id`; code
     search rows start with `name`.
 11. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
     `.get_secret_value()` only inside the HTTP adapter.

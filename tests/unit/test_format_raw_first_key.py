@@ -18,8 +18,8 @@ from untaped_github.domain.models import (
 
 PYDANTIC_ROW_SOURCES: dict[type[BaseModel], str] = {
     GithubUser: "login",
-    RepoResult: "id",
-    IssueResult: "id",
+    RepoResult: "full_name",
+    IssueResult: "repo",
     UserResult: "id",
     CodeResult: "name",
 }
