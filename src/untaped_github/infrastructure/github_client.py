@@ -37,6 +37,37 @@ class GithubClient:
     def me(self) -> dict[str, Any]:
         return self._http.get_json_dict("/user")
 
+    def get_repository(self, owner: str, repo: str) -> dict[str, Any]:
+        return self._http.get_json_dict(f"/repos/{owner}/{repo}")
+
+    def list_org_repos(self, org: str) -> Iterator[dict[str, Any]]:
+        return paginate_list(self._http, f"/orgs/{org}/repos")
+
+    def list_matching_refs(self, owner: str, repo: str, namespace: str) -> Iterator[dict[str, Any]]:
+        return paginate_list(self._http, f"/repos/{owner}/{repo}/git/matching-refs/{namespace}")
+
+    def get_tree(
+        self,
+        owner: str,
+        repo: str,
+        tree_sha: str,
+        *,
+        recursive: bool = False,
+    ) -> dict[str, Any]:
+        params = {"recursive": "1"} if recursive else None
+        return self._http.get_json_dict(
+            f"/repos/{owner}/{repo}/git/trees/{tree_sha}",
+            params=params,
+        )
+
+    def get_raw_content(self, owner: str, repo: str, path: str, *, ref: str) -> str:
+        response = self._http.get(
+            f"/repos/{owner}/{repo}/contents/{path}",
+            params={"ref": ref},
+            headers={"Accept": "application/vnd.github.raw"},
+        )
+        return response.text
+
     def search_repositories(
         self, q: str, *, sort: str | None = None, limit: int | None = None
     ) -> Iterator[dict[str, Any]]:
