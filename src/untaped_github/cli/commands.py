@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import typer
-from untaped import ColumnsOption, FormatOption, format_output, report_errors
+from untaped import ColumnsOption, FormatOption, ProfileOverrideOption, format_output, report_errors
 
 from untaped_github.cli._client import open_client
 from untaped_github.cli.search_commands import app as search_app
@@ -24,11 +24,12 @@ def _callback() -> None:
 def whoami_command(
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
+    profile: ProfileOverrideOption = None,
 ) -> None:
     """Show the authenticated GitHub user (``GET /user``)."""
     from untaped_github.application import WhoAmI  # noqa: PLC0415
 
-    with report_errors(), open_client() as client:
+    with report_errors(), open_client(profile) as client:
         user = WhoAmI(client)()
         typer.echo(format_output([user.model_dump()], fmt=fmt, columns=columns))
 

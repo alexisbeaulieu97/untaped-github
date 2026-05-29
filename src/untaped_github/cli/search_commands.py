@@ -15,6 +15,7 @@ from untaped import (
     ColumnsOption,
     ConfigError,
     FormatOption,
+    ProfileOverrideOption,
     format_output,
     report_errors,
 )
@@ -88,6 +89,7 @@ def repos_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
+    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search repositories (``GET /search/repositories``)."""
     from untaped_github.application import SearchRepos  # noqa: PLC0415
@@ -107,7 +109,7 @@ def repos_command(
             sort=sort,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client(profile) as client:
             use_case = SearchRepos(client, client, warn=_stderr_warn)
             rows = [
                 r.model_dump()
@@ -130,6 +132,7 @@ def code_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
+    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search code (``GET /search/code``).
 
@@ -152,7 +155,7 @@ def code_command(
             extension=extension,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client(profile) as client:
             use_case = SearchCode(client, client, warn=_stderr_warn)
             rows = [
                 r.model_dump()
@@ -179,6 +182,7 @@ def issues_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
+    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search issues and pull requests (``GET /search/issues``)."""
     from untaped_github.application import SearchIssues  # noqa: PLC0415
@@ -199,7 +203,7 @@ def issues_command(
             sort=sort,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client(profile) as client:
             use_case = SearchIssues(client, client, warn=_stderr_warn)
             rows = [
                 r.model_dump()
@@ -218,6 +222,7 @@ def users_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
+    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search users and organizations (``GET /search/users``)."""
     from untaped_github.application import SearchUsers  # noqa: PLC0415
@@ -232,6 +237,6 @@ def users_command(
             sort=sort,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client(profile) as client:
             rows = [r.model_dump() for r in SearchUsers(client)(filters)]
         typer.echo(format_output(rows, fmt=fmt, columns=columns))

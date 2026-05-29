@@ -38,6 +38,7 @@ untaped plugins add git+https://github.com/alexisbeaulieu97/untaped-github.git \
 ```bash
 untaped config set github.token ghp_xxx
 untaped github whoami
+untaped github whoami --profile work
 ```
 
 For GitHub Enterprise Server, configure the API base URL explicitly:

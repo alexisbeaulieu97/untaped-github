@@ -35,6 +35,35 @@ def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.stdout.strip() == "octocat"
 
 
+def test_whoami_profile_flag_reads_named_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "profiles:\n"
+        "  default:\n"
+        "    github:\n"
+        "      token: default-token\n"
+        "      base_url: https://wrong.example.com\n"
+        "  stage:\n"
+        "    github:\n"
+        "      token: stage-token\n"
+        "      base_url: https://api.github.com\n"
+        "active: default\n"
+    )
+    monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
+
+    with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
+        mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
+        result = CliRunner().invoke(
+            app, ["whoami", "--profile", "stage", "--format", "raw", "--columns", "login"]
+        )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "octocat"
+
+
 def test_whoami_requires_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(tmp_path / "missing.yml"))
     result = CliRunner().invoke(app, ["whoami"])

@@ -71,6 +71,60 @@ def test_search_repos_injects_at_me_and_renders_table(
     assert "language:python" in sent_q
 
 
+def test_search_repos_profile_flag_reads_named_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "profiles:\n"
+        "  default:\n"
+        "    github:\n"
+        "      token: default-token\n"
+        "      base_url: https://wrong.example.com\n"
+        "  stage:\n"
+        "    github:\n"
+        "      token: stage-token\n"
+        "      base_url: https://api.github.com\n"
+        "active: default\n"
+    )
+    monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
+
+    payload = {
+        "total_count": 1,
+        "incomplete_results": False,
+        "items": [
+            {
+                "id": 1,
+                "name": "alpha",
+                "full_name": "octocat/alpha",
+                "html_url": "https://github.com/octocat/alpha",
+                "stargazers_count": 7,
+            }
+        ],
+    }
+    with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "--profile",
+                "stage",
+                "--language",
+                "python",
+                "--format",
+                "raw",
+                "--columns",
+                "full_name",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "octocat/alpha"
+
+
 def test_search_repos_with_explicit_org_does_not_inject_at_me(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
