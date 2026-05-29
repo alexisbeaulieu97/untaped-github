@@ -163,8 +163,7 @@ def test_search_repos_team_resolution(tmp_path: Path, monkeypatch: pytest.Monkey
 
     assert result.exit_code == 0, result.output
     sent_q = search_route.calls[0].request.url.params["q"]
-    assert "repo:acme/api" in sent_q
-    assert "repo:acme/web" in sent_q
+    assert sent_q == "org:acme (repo:acme/api OR repo:acme/web)"
 
 
 def test_search_code_passes_query_and_filters(
@@ -197,6 +196,32 @@ def test_search_code_passes_query_and_filters(
     assert "TODO" in sent_q
     assert "language:python" in sent_q
     assert "user:@me" in sent_q
+
+
+def test_search_code_repeated_repos_render_or_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "code",
+                "TODO",
+                "--repo",
+                "acme/api",
+                "--repo",
+                "acme/web",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:acme/web)"
 
 
 def test_search_issues_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
