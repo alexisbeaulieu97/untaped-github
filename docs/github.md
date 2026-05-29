@@ -58,7 +58,7 @@ untaped github search repos --language python
 untaped github search repos --language python --profile work
 untaped github search repos --name client --language Go
 untaped github search repos --org acme --visibility private
-untaped github search repos --org acme --team backend
+untaped github search repos --team acme/backend
 untaped github search code "TODO" --language python
 untaped github search issues --state open --label bug --kind pr
 untaped github search users --kind org --location montreal
@@ -71,10 +71,15 @@ Common flags for `repos`, `code`, and `issues`:
 | `--user`      | `user:<login>` qualifier; pass `@me` to be explicit.                 |
 | `--org`       | `org:<name>` qualifier; repeatable.                                  |
 | `--repo`      | `repo:owner/name`; repeated values render as an OR scope group.       |
-| `--team SLUG` | Resolves the team's repos into an OR repo scope. Requires `--org`.   |
+| `--repo-stdin`| Read `owner/name` repo scopes from stdin and append to `--repo`.      |
+| `--team ORG/SLUG` | Resolves the team's repos into an OR repo scope; repeatable.    |
 | `--limit N`   | Stop after N rows. Default `30`; GitHub search caps at 1000 rows.    |
 | `--format`    | `table` (default), `json`, `yaml`, `raw`.                            |
 | `--columns`   | Repeatable; dotted paths supported.                                  |
+
+`--team SLUG --org ORG` is still accepted, but docs prefer the
+self-contained `--team ORG/SLUG` form so each team scope can be copied
+or repeated without depending on another flag.
 
 Repository-specific: `--name`, `--language`, `--archived/--no-archived`,
 `--fork/--no-fork`, `--visibility public|private`, `--sort stars|forks|updated`.
@@ -101,7 +106,12 @@ untaped github search issues "memory leak" --state open
 ```bash
 untaped github search repos --language python --format raw --columns full_name
 
-untaped github search repos --org acme --format raw --columns full_name   | xargs -L1 gh repo view
+untaped github search repos --org acme --format raw --columns full_name \
+  | untaped github search code "TODO" --repo-stdin --format raw --columns repo --columns path
+
+untaped github search repos --org acme --format raw --columns full_name \
+  | untaped github search issues --state open --repo-stdin \
+      --format raw --columns repo --columns number --columns title
 ```
 
 ## See Also

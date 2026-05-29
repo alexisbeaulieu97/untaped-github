@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
 from pydantic import BaseModel
-from untaped import ConfigError
 
 from untaped_github.application.ports import GithubSearchService, GithubTeamService
 from untaped_github.domain import (
@@ -31,6 +31,14 @@ WarnFn = Callable[[str], None]
 MAX_TEAM_REPO_QUALIFIERS = 6
 
 
+@dataclass(frozen=True)
+class TeamScope:
+    """A GitHub team scoped by owning organization."""
+
+    org: str
+    slug: str
+
+
 def _noop(_: str) -> None:
     pass
 
@@ -38,32 +46,30 @@ def _noop(_: str) -> None:
 def _resolve_team_repos(
     teams: GithubTeamService,
     *,
-    org: str | None,
-    team: str | None,
+    team_scopes: tuple[TeamScope, ...],
     warn: WarnFn,
 ) -> tuple[str, ...]:
-    """Pre-resolve ``--team`` into a tuple of ``owner/name`` strings.
+    """Pre-resolve team scopes into ``owner/name`` repo strings.
 
     Bounded at ``MAX_TEAM_REPO_QUALIFIERS + 1`` so a 5k-repo team doesn't
     drag every page over the wire just to be truncated.
     """
-    if team is None:
-        return ()
-    if not org:
-        raise ConfigError("--team requires --org (GitHub teams are scoped to an org)")
     cap = MAX_TEAM_REPO_QUALIFIERS + 1
-    repos: list[str] = []
-    for entry in islice(teams.list_team_repos(org, team), cap):
-        full_name = entry.get("full_name")
-        if isinstance(full_name, str) and full_name:
-            repos.append(full_name)
-    if len(repos) > MAX_TEAM_REPO_QUALIFIERS:
-        warn(
-            f"team {org}/{team} has more than {MAX_TEAM_REPO_QUALIFIERS} repos; "
-            "truncating to stay under GitHub's query length limit"
-        )
-        repos = repos[:MAX_TEAM_REPO_QUALIFIERS]
-    return tuple(repos)
+    all_repos: list[str] = []
+    for scope in team_scopes:
+        repos: list[str] = []
+        for entry in islice(teams.list_team_repos(scope.org, scope.slug), cap):
+            full_name = entry.get("full_name")
+            if isinstance(full_name, str) and full_name:
+                repos.append(full_name)
+        if len(repos) > MAX_TEAM_REPO_QUALIFIERS:
+            warn(
+                f"team {scope.org}/{scope.slug} has more than {MAX_TEAM_REPO_QUALIFIERS} repos; "
+                "truncating to stay under GitHub's query length limit"
+            )
+            repos = repos[:MAX_TEAM_REPO_QUALIFIERS]
+        all_repos.extend(repos)
+    return tuple(all_repos)
 
 
 def _apply_scope_defaults[F: ScopedQueryBase](filters: F, team_repos: tuple[str, ...]) -> F:
@@ -85,11 +91,10 @@ def _run_scoped_search[F: ScopedQueryBase, R: BaseModel](
     teams: GithubTeamService,
     filters: F,
     *,
-    org: str | None,
-    team: str | None,
+    team_scopes: tuple[TeamScope, ...],
     warn: WarnFn,
 ) -> Iterator[R]:
-    team_repos = _resolve_team_repos(teams, org=org, team=team, warn=warn)
+    team_repos = _resolve_team_repos(teams, team_scopes=team_scopes, warn=warn)
     effective = _apply_scope_defaults(filters, team_repos)
     q = effective.to_query_string()
     for row in search_method(q, sort=effective.sort, limit=effective.limit):
@@ -114,16 +119,14 @@ class SearchRepos:
         self,
         filters: RepoSearchFilters,
         *,
-        org: str | None = None,
-        team: str | None = None,
+        team_scopes: tuple[TeamScope, ...] = (),
     ) -> Iterator[RepoResult]:
         return _run_scoped_search(
             self._search.search_repositories,
             RepoResult,
             self._teams,
             filters,
-            org=org,
-            team=team,
+            team_scopes=team_scopes,
             warn=self._warn,
         )
 
@@ -146,16 +149,14 @@ class SearchCode:
         self,
         filters: CodeSearchFilters,
         *,
-        org: str | None = None,
-        team: str | None = None,
+        team_scopes: tuple[TeamScope, ...] = (),
     ) -> Iterator[CodeResult]:
         return _run_scoped_search(
             self._search.search_code,
             CodeResult,
             self._teams,
             filters,
-            org=org,
-            team=team,
+            team_scopes=team_scopes,
             warn=self._warn,
         )
 
@@ -178,16 +179,14 @@ class SearchIssues:
         self,
         filters: IssueSearchFilters,
         *,
-        org: str | None = None,
-        team: str | None = None,
+        team_scopes: tuple[TeamScope, ...] = (),
     ) -> Iterator[IssueResult]:
         return _run_scoped_search(
             self._search.search_issues,
             IssueResult,
             self._teams,
             filters,
-            org=org,
-            team=team,
+            team_scopes=team_scopes,
             warn=self._warn,
         )
 

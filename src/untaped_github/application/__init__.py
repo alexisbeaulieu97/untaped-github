@@ -8,6 +8,7 @@ from untaped_github.application.search import (
     SearchIssues,
     SearchRepos,
     SearchUsers,
+    TeamScope,
 )
 from untaped_github.application.whoami import WhoAmI
 
@@ -19,5 +20,6 @@ __all__ = [
     "SearchIssues",
     "SearchRepos",
     "SearchUsers",
+    "TeamScope",
     "WhoAmI",
 ]
