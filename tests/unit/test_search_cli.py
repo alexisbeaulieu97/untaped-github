@@ -420,9 +420,49 @@ def test_search_issues_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         )
 
     assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed[0]["repo"] == "me/p"
     sent_q = route.calls[0].request.url.params["q"]
     for token in ("is:pr", "is:open", "label:bug", "user:@me"):
         assert token in sent_q
+
+
+def test_search_issues_raw_repo_number_columns_are_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    payload = {
+        "items": [
+            {
+                "id": 1,
+                "number": 42,
+                "title": "first",
+                "state": "open",
+                "html_url": "https://x",
+                "repository_url": "https://api.github.com/repos/acme/api",
+                "user": {"login": "octocat"},
+            }
+        ]
+    }
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/issues").mock(return_value=httpx.Response(200, json=payload))
+        result = CliRunner().invoke(
+            app,
+            [
+                "search",
+                "issues",
+                "--format",
+                "raw",
+                "--columns",
+                "repo",
+                "--columns",
+                "number",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "acme/api\t42"
 
 
 def test_search_users_no_at_me(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

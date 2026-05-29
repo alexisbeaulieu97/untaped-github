@@ -104,12 +104,12 @@ untaped github search issues "memory leak" --state open
 ## Pipe-Friendly Examples
 
 ```bash
-untaped github search repos --language python --format raw --columns full_name
+untaped github search repos --language python --format raw
 
-untaped github search repos --org acme --format raw --columns full_name \
+untaped github search repos --org acme --format raw \
   | untaped github search code "TODO" --repo-stdin --format raw --columns repo --columns path
 
-untaped github search repos --org acme --format raw --columns full_name \
+untaped github search repos --org acme --format raw \
   | untaped github search issues --state open --repo-stdin \
       --format raw --columns repo --columns number --columns title
 ```

@@ -30,8 +30,24 @@ def test_issue_result_handles_missing_user() -> None:
             "repository_url": "https://api.github.com/repos/me/p",
         }
     )
+    assert row.repo == "me/p"
     assert row.user_login is None
     assert row.is_pull_request is False
+
+
+def test_issue_result_preserves_explicit_repo() -> None:
+    row = IssueResult.model_validate(
+        {
+            "id": 1,
+            "number": 1,
+            "title": "t",
+            "state": "open",
+            "html_url": "https://x",
+            "repository_url": "https://api.github.com/repos/me/p",
+            "repo": "explicit/repo",
+        }
+    )
+    assert row.repo == "explicit/repo"
 
 
 def test_issue_result_handles_non_dict_user() -> None:

@@ -23,9 +23,9 @@ class RepoResult(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    full_name: str
     id: int
     name: str
-    full_name: str
     html_url: str
     description: str | None = None
     language: str | None = None
@@ -74,8 +74,9 @@ class IssueResult(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    id: int
+    repo: str = ""
     number: int
+    id: int
     title: str
     state: str
     html_url: str
@@ -89,6 +90,10 @@ class IssueResult(BaseModel):
         if not isinstance(data, dict):
             return data
         patch: dict[str, Any] = {}
+        if "repo" not in data:
+            repo = _repo_from_repository_url(data.get("repository_url"))
+            if repo:
+                patch["repo"] = repo
         if "user_login" not in data:
             user = data.get("user") or {}
             if isinstance(user, dict):
@@ -96,6 +101,16 @@ class IssueResult(BaseModel):
         if "is_pull_request" not in data:
             patch["is_pull_request"] = "pull_request" in data and data["pull_request"] is not None
         return {**data, **patch} if patch else data
+
+
+def _repo_from_repository_url(value: Any) -> str | None:
+    """Extract ``owner/name`` from GitHub's repository API URL."""
+    if not isinstance(value, str):
+        return None
+    marker = "/repos/"
+    if marker not in value:
+        return None
+    return value.rsplit(marker, 1)[1].strip("/") or None
 
 
 class UserResult(BaseModel):
