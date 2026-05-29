@@ -106,6 +106,15 @@ or call site that consumes it.
 
 TLS comes from `resolve_verify(http)` using core `HttpSettings`.
 
+## Public Client API
+
+`untaped_github` intentionally re-exports `GithubClient` and
+`GithubSettings` for sibling plugins that need GitHub access. Keep this
+surface small and tested. Cross-plugin consumers may use repository
+metadata, org/team repository listing, matching refs, tree reads, and raw
+content reads. Add missing GitHub operations here rather than duplicating a
+GitHub client in another plugin or importing private CLI helpers.
+
 ## Rate Limiting
 
 Authenticated GitHub gives 5000 requests/hour overall and a separate
