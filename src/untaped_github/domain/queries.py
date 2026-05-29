@@ -29,6 +29,15 @@ def _quote(value: str) -> str:
     return f'"{value}"' if any(c.isspace() for c in value) else value
 
 
+def _repo_scope(repos: tuple[str, ...]) -> str | None:
+    """Render repository scopes with OR semantics when multiple are present."""
+    if not repos:
+        return None
+    if len(repos) == 1:
+        return f"repo:{repos[0]}"
+    return "(" + " OR ".join(f"repo:{repo}" for repo in repos) + ")"
+
+
 class _QueryBase(BaseModel):
     """Fields shared by every search type."""
 
@@ -60,7 +69,9 @@ class ScopedQueryBase(_QueryBase):
         if self.user:
             parts.append(f"user:{self.user}")
         parts.extend(f"org:{org}" for org in self.orgs)
-        parts.extend(f"repo:{repo}" for repo in self.repos)
+        repo_scope = _repo_scope(self.repos)
+        if repo_scope:
+            parts.append(repo_scope)
         return parts
 
     def _assemble(self, *extra_qualifiers: str) -> str:

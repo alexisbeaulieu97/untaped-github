@@ -61,6 +61,10 @@ def test_repo_query_string(filters: RepoSearchFilters, expected: str) -> None:
             CodeSearchFilters(path="src/lib"),
             "path:src/lib",
         ),
+        (
+            CodeSearchFilters(raw_query="TODO", repos=("acme/api", "acme/web")),
+            "TODO (repo:acme/api OR repo:acme/web)",
+        ),
     ],
 )
 def test_code_query_string(filters: CodeSearchFilters, expected: str) -> None:
@@ -77,6 +81,10 @@ def test_code_query_string(filters: CodeSearchFilters, expected: str) -> None:
         (
             IssueSearchFilters(author="octocat", labels=("bug", "needs triage")),
             'author:octocat label:bug label:"needs triage"',
+        ),
+        (
+            IssueSearchFilters(kind="issue", repos=("acme/api", "acme/web")),
+            "(repo:acme/api OR repo:acme/web) is:issue",
         ),
     ],
 )

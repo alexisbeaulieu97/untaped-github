@@ -115,10 +115,20 @@ def test_search_repos_resolves_team_into_repo_qualifiers() -> None:
 
     assert teams.calls == [("acme", "backend")]
     q = search.calls[0][1]
-    assert "repo:acme/api" in q
-    assert "repo:acme/web" in q
+    assert q == "(repo:acme/api OR repo:acme/web)"
     # team resolution counts as scope; no @me injection
     assert "user:@me" not in q
+
+
+def test_search_code_resolves_team_repos_with_or_semantics() -> None:
+    search = _StubSearch([])
+    teams = _StubTeams([{"full_name": "acme/api"}, {"full_name": "acme/web"}])
+    use_case = SearchCode(_stub(search), _teams(teams))
+
+    list(use_case(CodeSearchFilters(raw_query="TODO"), org="acme", team="backend"))
+
+    assert teams.calls == [("acme", "backend")]
+    assert search.calls[0][1] == "TODO (repo:acme/api OR repo:acme/web)"
 
 
 def test_search_repos_team_without_org_raises() -> None:
@@ -139,6 +149,8 @@ def test_search_repos_truncates_oversized_team_with_warning() -> None:
     assert any("truncating" in w for w in warnings)
     q = search.calls[0][1]
     assert q.count("repo:") == MAX_TEAM_REPO_QUALIFIERS
+    assert q.count(" OR ") == MAX_TEAM_REPO_QUALIFIERS - 1
+    assert len(q) < 256
 
 
 def test_search_repos_validates_results_into_domain_model() -> None:

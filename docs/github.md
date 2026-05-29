@@ -70,8 +70,8 @@ Common flags for `repos`, `code`, and `issues`:
 | ------------- | -------------------------------------------------------------------- |
 | `--user`      | `user:<login>` qualifier; pass `@me` to be explicit.                 |
 | `--org`       | `org:<name>` qualifier; repeatable.                                  |
-| `--repo`      | `repo:owner/name` qualifier; repeatable.                             |
-| `--team SLUG` | Resolves the team's repos into `repo:` qualifiers. Requires `--org`. |
+| `--repo`      | `repo:owner/name`; repeated values render as an OR scope group.       |
+| `--team SLUG` | Resolves the team's repos into an OR repo scope. Requires `--org`.   |
 | `--limit N`   | Stop after N rows. Default `30`; GitHub search caps at 1000 rows.    |
 | `--format`    | `table` (default), `json`, `yaml`, `raw`.                            |
 | `--columns`   | Repeatable; dotted paths supported.                                  |

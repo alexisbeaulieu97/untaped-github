@@ -24,10 +24,11 @@ from untaped_github.domain import (
 
 WarnFn = Callable[[str], None]
 
-# 200 ``repo:owner/name`` qualifiers leave ample headroom under GitHub's
-# 256-char ``q`` limit and 5-boolean-operator cap. Bumping past ~250
-# without measuring will start tripping the URL or operator cap.
-MAX_TEAM_REPO_QUALIFIERS = 200
+# Team expansion is generated, not user-authored, so keep the automatic
+# OR group small. Six short repo qualifiers render below GitHub's 256-char
+# query budget while still covering the common "backend owns a few repos"
+# case; users can pass explicit --repo values when they need a wider query.
+MAX_TEAM_REPO_QUALIFIERS = 6
 
 
 def _noop(_: str) -> None:

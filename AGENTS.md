@@ -136,6 +136,11 @@ The three scoped subcommands (`repos`, `code`, `issues`) accept `--user`,
 those qualifiers, so exposing them would mislead. All search commands share
 `--limit` and core `--format/-f` + `--columns/-c`.
 
+Repeated `--repo` scopes render as one parenthesized OR group, e.g.
+`(repo:acme/api OR repo:acme/web)`, because GitHub treats whitespace as
+AND and a multi-repo search must match any listed repository. A single
+repo keeps the simple `repo:owner/name` shape.
+
 `search code` does not accept `--sort`; GitHub no longer supports sorting
 code search results.
 
@@ -157,12 +162,13 @@ does not inject anything because GitHub user search ignores those qualifiers.
 
 There is no `team:` qualifier in GitHub search. When `--team` is passed, the
 use case calls `GET /orgs/{org}/teams/{slug}/repos` and expands the result
-into `repo:owner/name` qualifiers. `--team` without `--org` raises
-`ConfigError`. The use case bounds iteration at
+into the same parenthesized OR repo group used by explicit repeated
+`--repo` flags. `--team` without `--org` raises `ConfigError`. The use case bounds iteration at
 `MAX_TEAM_REPO_QUALIFIERS + 1` with `itertools.islice`; if the cap is
 exceeded, keep the first N and emit a stderr warning through the injected
-`warn` callback. Raise the cap above 256 only after measuring, because the
-search API also rejects queries with too many boolean operators.
+`warn` callback. Keep the cap conservative: the generated OR group expands
+quickly under GitHub's search query length budget, and users can pass
+explicit `--repo` scopes when they intentionally want a wider query.
 
 ### Pagination
 
