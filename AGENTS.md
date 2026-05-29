@@ -70,6 +70,11 @@ The CLI composition root reads it once and passes the narrowed
 `GithubSettings` into `GithubClient`. Adapters never read the full core
 settings aggregate directly.
 
+Commands that read settings expose the core command-local
+`ProfileOverrideOption` as `--profile` and pass it into
+`open_client(profile)`. `open_client` applies `profile_override(profile)`
+around both core HTTP settings and the `github` profile section lookup.
+
 `GithubClient.__init__` fail-fasts with `ConfigError` if the token is
 missing or whitespace-only. There is no anonymous-mode fallback;
 unauthenticated GitHub is rate-limited enough that supporting it inline
