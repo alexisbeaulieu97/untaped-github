@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import typer
-from untaped import ColumnsOption, FormatOption, ProfileOverrideOption, format_output, report_errors
+from untaped import ColumnsOption, FormatOption, ProfileOverrideOption, report_errors
 
 from untaped_github.cli._client import open_client
+from untaped_github.cli._rendering import render_rows
 from untaped_github.cli.search_commands import app as search_app
 
 app = typer.Typer(
@@ -31,7 +32,7 @@ def whoami_command(
 
     with report_errors(), open_client(profile) as client:
         user = WhoAmI(client)()
-        typer.echo(format_output([user.model_dump()], fmt=fmt, columns=columns))
+        typer.echo(render_rows([user.model_dump()], fmt=fmt, columns=columns))
 
 
 app.add_typer(search_app, name="search")

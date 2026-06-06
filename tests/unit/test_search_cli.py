@@ -28,6 +28,22 @@ def _write_config(tmp_path: Path) -> Path:
     return cfg
 
 
+def _write_list_view_config(tmp_path: Path) -> Path:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "ui:\n  collection_view: list\nprofiles:\n  default:\n    github:\n      token: ghp_test\n"
+    )
+    return cfg
+
+
+def _write_missing_theme_config(tmp_path: Path) -> Path:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "ui:\n  theme: missing\nprofiles:\n  default:\n    github:\n      token: ghp_test\n"
+    )
+    return cfg
+
+
 def test_search_repos_injects_at_me_and_renders_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -69,6 +85,63 @@ def test_search_repos_injects_at_me_and_renders_table(
     sent_q = route.calls[0].request.url.params["q"]
     assert "user:@me" in sent_q
     assert "language:python" in sent_q
+
+
+def test_search_repos_table_honors_list_collection_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_list_view_config(tmp_path)))
+
+    payload = {
+        "total_count": 1,
+        "incomplete_results": False,
+        "items": [
+            {
+                "id": 1,
+                "name": "alpha",
+                "full_name": "octocat/alpha",
+                "html_url": "https://github.com/octocat/alpha",
+                "stargazers_count": 7,
+            }
+        ],
+    }
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
+        result = CliRunner().invoke(app, ["search", "repos", "--format", "table"])
+
+    assert result.exit_code == 0, result.output
+    assert "full_name: octocat/alpha" in result.stdout
+    assert "name: alpha" in result.stdout
+    assert "─" not in result.stdout
+    assert "│" not in result.stdout
+
+
+def test_search_repos_raw_ignores_invalid_ui_theme(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_missing_theme_config(tmp_path)))
+
+    payload = {
+        "total_count": 1,
+        "incomplete_results": False,
+        "items": [
+            {
+                "id": 1,
+                "name": "alpha",
+                "full_name": "octocat/alpha",
+                "html_url": "https://github.com/octocat/alpha",
+                "stargazers_count": 7,
+            }
+        ],
+    }
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
+        result = CliRunner().invoke(app, ["search", "repos", "--format", "raw"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "octocat/alpha"
+    assert "\x1b[" not in result.output
+    assert "unknown UI theme" not in result.output
 
 
 def test_search_repos_profile_flag_reads_named_profile(

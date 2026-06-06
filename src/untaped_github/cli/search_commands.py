@@ -2,8 +2,8 @@
 
 Four subcommands, one per GitHub search endpoint. Each builds a frozen
 filter object from CLI flags, hands it to its use case, and pipes the
-result through ``format_output``. Composition lives here; the use cases
-own the orchestration.
+result through the package-local row renderer. Composition lives here;
+the use cases own the orchestration.
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from untaped import (
     ConfigError,
     FormatOption,
     ProfileOverrideOption,
-    format_output,
     read_identifiers,
     report_errors,
 )
 
 from untaped_github.application import TeamScope
 from untaped_github.cli._client import open_client
+from untaped_github.cli._rendering import render_rows
 
 # Shared across all four search subcommands. GitHub-specific (the
 # 1000-result cap belongs to GitHub, not untaped), so it lives
@@ -130,7 +130,7 @@ def repos_command(
             use_case = SearchRepos(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team, org)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        typer.echo(format_output(rows, fmt=fmt, columns=columns))
+        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
 
 
 @app.command("code", no_args_is_help=False)
@@ -177,7 +177,7 @@ def code_command(
             use_case = SearchCode(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team, org)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        typer.echo(format_output(rows, fmt=fmt, columns=columns))
+        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
 
 
 @app.command("issues", no_args_is_help=False)
@@ -226,7 +226,7 @@ def issues_command(
             use_case = SearchIssues(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team, org)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        typer.echo(format_output(rows, fmt=fmt, columns=columns))
+        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
 
 
 @app.command("users", no_args_is_help=False)
@@ -256,4 +256,4 @@ def users_command(
         )
         with open_client(profile) as client:
             rows = [r.model_dump() for r in SearchUsers(client)(filters)]
-        typer.echo(format_output(rows, fmt=fmt, columns=columns))
+        typer.echo(render_rows(rows, fmt=fmt, columns=columns))

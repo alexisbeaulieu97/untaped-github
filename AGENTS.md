@@ -35,15 +35,23 @@ primitives, and shared errors.
    `no_args_is_help=True`.**
 9. **stdout is data only.** Prompts, progress, and status messages go to
    stderr via `typer.echo(..., err=True)`.
-10. **Pipe-friendly commands keep stable raw identifiers.** `GithubUser`
-    starts with `login`; repo search rows start with `full_name`; issue
-    search rows start with `repo`; user search rows start with `id`; code
-    search rows start with `name`.
-11. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
+10. **Pipe-friendly commands keep stable raw first-key identifiers.** These
+    raw first-key contracts are load-bearing: `GithubUser` starts with
+    `login`; repo search rows start with `full_name`; issue search rows
+    start with `repo`; user search rows start with `id`; code search rows
+    start with `name`.
+11. **Human table output honors global UI settings.** GitHub row commands
+    render `--format table` through the active settings-backed
+    `ui_context().collection(...)` so global themes and
+    `ui.collection_view` apply.
+12. **Structured output bypasses global themes.** `--format json`, `yaml`,
+    and `raw` render through a plain `UiContext().collection(...)` so
+    invalid or missing themes never break pipe-friendly output.
+13. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
     `.get_secret_value()` only inside the HTTP adapter.
-12. **Use `resolve_verify(http)` for GitHub HTTP clients.** Never hard-code
+14. **Use `resolve_verify(http)` for GitHub HTTP clients.** Never hard-code
     TLS verification policy.
-13. **Finish with verification.** Run `uv run ruff check --fix`,
+15. **Finish with verification.** Run `uv run ruff check --fix`,
     `uv run ruff format`, `uv run mypy`, and `uv run pytest`.
 
 ## Architecture
