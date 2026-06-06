@@ -23,6 +23,22 @@ def _write_config(tmp_path: Path) -> Path:
     return cfg
 
 
+def _write_list_view_config(tmp_path: Path) -> Path:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "ui:\n  collection_view: list\nprofiles:\n  default:\n    github:\n      token: ghp_test\n"
+    )
+    return cfg
+
+
+def _write_missing_theme_config(tmp_path: Path) -> Path:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "ui:\n  theme: missing\nprofiles:\n  default:\n    github:\n      token: ghp_test\n"
+    )
+    return cfg
+
+
 def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
     monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
@@ -33,6 +49,39 @@ def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "octocat"
+
+
+def test_whoami_table_honors_list_collection_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _write_list_view_config(tmp_path)
+    monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
+        result = CliRunner().invoke(app, ["whoami", "--format", "table"])
+
+    assert result.exit_code == 0, result.output
+    assert "login: octocat" in result.stdout
+    assert "id: 1" in result.stdout
+    assert "─" not in result.stdout
+    assert "│" not in result.stdout
+
+
+def test_whoami_raw_ignores_invalid_ui_theme(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _write_missing_theme_config(tmp_path)
+    monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
+        result = CliRunner().invoke(app, ["whoami", "--format", "raw"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "octocat"
+    assert "\x1b[" not in result.output
+    assert "unknown UI theme" not in result.output
 
 
 def test_whoami_profile_flag_reads_named_profile(
