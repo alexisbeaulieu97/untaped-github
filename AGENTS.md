@@ -20,6 +20,8 @@ primitives, and shared errors.
    `uv add --group dev`; hand-edit tool config only.
 3. **Expose the plugin through the `untaped.plugins` entry point.**
    `github = "untaped_github.plugin:plugin"` is the public integration point.
+   The plugin object must expose `id = "github"`, literal
+   `untaped_api_version = 1`, and `register(registry)`.
 4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
    `infrastructure -> domain`; `application` and `infrastructure` must not
    import each other at runtime.
@@ -58,8 +60,9 @@ src/untaped_github/
 ```
 
 The plugin object registers `GithubSettings` as the `github` profile
-settings section and mounts the Typer app as the root `github` command.
-Plugin code reads typed settings with
+settings section, mounts the Typer app as the root `github` command, and
+registers the packaged `untaped-github` agent skill. Plugin code reads typed
+settings with
 `get_config_section("github", GithubSettings)`, not a global aggregate
 `settings.github` attribute.
 
