@@ -9,7 +9,7 @@ requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.13.3",
     "typer>=0.25.1",
-    "untaped",
+    "untaped>=0.1.0",
 ]
 
 [project.entry-points."untaped.plugins"]

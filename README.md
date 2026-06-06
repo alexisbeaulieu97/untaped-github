@@ -10,8 +10,8 @@ GitHub REST search across repositories, code, issues/PRs, and users/orgs.
 Install both `untaped` and this plugin from git:
 
 ```bash
-uv tool install "git+https://github.com/alexisbeaulieu97/untaped.git" \
-  --with "untaped-github @ git+https://github.com/alexisbeaulieu97/untaped-github.git" \
+uv tool install "git+https://github.com/alexisbeaulieu97/untaped.git@v0.1.0" \
+  --with "untaped-github @ git+https://github.com/alexisbeaulieu97/untaped-github.git@v0.2.0" \
   --no-sources \
   --force
 ```
