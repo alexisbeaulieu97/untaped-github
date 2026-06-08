@@ -71,6 +71,13 @@ def test_code_query_string(filters: CodeSearchFilters, expected: str) -> None:
     assert filters.to_query_string() == expected
 
 
+def test_code_filters_reject_sort_field() -> None:
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        CodeSearchFilters(raw_query="TODO", sort="updated")  # type: ignore[call-arg]
+
+
 @pytest.mark.parametrize(
     ("filters", "expected"),
     [
