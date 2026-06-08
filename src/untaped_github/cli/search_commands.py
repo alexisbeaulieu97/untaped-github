@@ -55,21 +55,14 @@ def _stderr_warn(message: str) -> None:
     typer.echo(f"warning: {message}", err=True)
 
 
-def _parse_team_scopes(values: list[str] | None, orgs: list[str] | None) -> tuple[TeamScope, ...]:
+def _parse_team_scopes(values: list[str] | None) -> tuple[TeamScope, ...]:
     """Parse repeatable ``--team`` values into explicit org/slug scopes."""
     scopes: list[TeamScope] = []
     for value in values or ():
-        if "/" in value:
-            org, slug = value.split("/", 1)
-            if not org or not slug:
-                raise ConfigError("--team must be ORG/SLUG or SLUG with a single --org")
-            scopes.append(TeamScope(org=org, slug=slug))
-            continue
-        if not orgs:
-            raise ConfigError("--team requires ORG/SLUG or a single --org")
-        if len(orgs) > 1:
-            raise ConfigError("--team SLUG requires a single --org (got multiple)")
-        scopes.append(TeamScope(org=orgs[0], slug=value))
+        org, sep, slug = value.partition("/")
+        if sep != "/" or not org or not slug:
+            raise ConfigError("--team must be ORG/SLUG")
+        scopes.append(TeamScope(org=org, slug=slug))
     return tuple(scopes)
 
 
@@ -91,7 +84,7 @@ def repos_command(
     team: list[str] | None = typer.Option(
         None,
         "--team",
-        help="Team ORG/SLUG, or SLUG with one --org. Repeatable.",
+        help="Team ORG/SLUG. Repeatable.",
     ),
     repo: list[str] | None = typer.Option(None, "--repo", help="repo:owner/name. Repeatable."),
     repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
@@ -128,7 +121,7 @@ def repos_command(
         )
         with open_client(profile) as client:
             use_case = SearchRepos(client, client, warn=_stderr_warn)
-            team_scopes = _parse_team_scopes(team, org)
+            team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         typer.echo(render_rows(rows, fmt=fmt, columns=columns))
 
@@ -138,9 +131,7 @@ def code_command(
     query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
     user: str | None = typer.Option(None, "--user"),
     org: list[str] | None = typer.Option(None, "--org", help="Repeatable."),
-    team: list[str] | None = typer.Option(
-        None, "--team", help="Team ORG/SLUG, or SLUG with one --org. Repeatable."
-    ),
+    team: list[str] | None = typer.Option(None, "--team", help="Team ORG/SLUG. Repeatable."),
     repo: list[str] | None = typer.Option(None, "--repo", help="Repeatable."),
     repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
     language: str | None = typer.Option(None, "--language"),
@@ -175,7 +166,7 @@ def code_command(
         )
         with open_client(profile) as client:
             use_case = SearchCode(client, client, warn=_stderr_warn)
-            team_scopes = _parse_team_scopes(team, org)
+            team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         typer.echo(render_rows(rows, fmt=fmt, columns=columns))
 
@@ -185,9 +176,7 @@ def issues_command(
     query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
     user: str | None = typer.Option(None, "--user"),
     org: list[str] | None = typer.Option(None, "--org", help="Repeatable."),
-    team: list[str] | None = typer.Option(
-        None, "--team", help="Team ORG/SLUG, or SLUG with one --org. Repeatable."
-    ),
+    team: list[str] | None = typer.Option(None, "--team", help="Team ORG/SLUG. Repeatable."),
     repo: list[str] | None = typer.Option(None, "--repo", help="Repeatable."),
     repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
     state: Literal["open", "closed"] | None = typer.Option(None, "--state"),
@@ -224,7 +213,7 @@ def issues_command(
         )
         with open_client(profile) as client:
             use_case = SearchIssues(client, client, warn=_stderr_warn)
-            team_scopes = _parse_team_scopes(team, org)
+            team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         typer.echo(render_rows(rows, fmt=fmt, columns=columns))
 
