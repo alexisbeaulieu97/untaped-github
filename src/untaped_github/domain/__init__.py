@@ -9,7 +9,6 @@ from untaped_github.domain.queries import (
     CodeSearchFilters,
     IssueSearchFilters,
     RepoSearchFilters,
-    ScopedQueryBase,
     UserSearchFilters,
 )
 
@@ -21,7 +20,6 @@ __all__ = [
     "IssueSearchFilters",
     "RepoResult",
     "RepoSearchFilters",
-    "ScopedQueryBase",
     "UserResult",
     "UserSearchFilters",
 ]

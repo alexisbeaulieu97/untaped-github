@@ -58,7 +58,7 @@ primitives, and shared errors.
 
 ```text
 src/untaped_github/
-├── __init__.py           # re-exports app
+├── __init__.py           # small root API: GithubClient, GithubSettings
 ├── plugin.py             # entry-point plugin object
 ├── settings.py           # plugin-owned config model
 ├── cli/                  # Typer commands; composition root
@@ -148,12 +148,12 @@ subcommand per GitHub search endpoint:
 | -------------- | ---------------------- | ----------- |
 | `search repos` | `/search/repositories` | `--name`, `--language`, `--archived/--no-archived`, `--fork/--no-fork`, `--visibility`, `--sort` |
 | `search code`  | `/search/code`         | `--language`, `--filename`, `--path`, `--extension` |
-| `search issues`| `/search/issues`       | `--state`, `--kind issue\|pr`, `--author`, `--assignee`, `--label`, `--mentions` |
-| `search users` | `/search/users`        | `--kind user\|org`, `--location`, `--language` |
+| `search issues`| `/search/issues`       | `--state`, `--kind issue\|pr`, `--author`, `--assignee`, `--label`, `--mentions`, `--sort` |
+| `search users` | `/search/users`        | `--kind user\|org`, `--location`, `--language`, `--sort` |
 
 The three scoped subcommands (`repos`, `code`, `issues`) accept `--user`,
-`--org` (repeatable), `--repo` (repeatable), `--repo-stdin`, and `--team`
-(repeatable). `search users` does not; GitHub's user-search endpoint
+`--org` (repeatable), `--repo` (repeatable), `--repo-stdin`, and
+`--team ORG/SLUG` (repeatable). `search users` does not; GitHub's user-search endpoint
 ignores those qualifiers, so exposing them would mislead. All search
 commands share `--limit` and core `--format/-f` + `--columns/-c`.
 
@@ -181,10 +181,10 @@ does not inject anything because GitHub user search ignores those qualifiers.
 
 ### Team-to-repo Resolution
 
-There is no `team:` qualifier in GitHub search. `--team ORG/SLUG` is the
-preferred self-contained form; `--team SLUG --org ORG` stays as a
-convenience when there is exactly one org. CLI parsing turns both forms
-into `TeamScope(org, slug)` objects, then the use case calls
+There is no `team:` qualifier in GitHub search. `--team` must be the
+self-contained `ORG/SLUG` form; `--org` remains a search qualifier and
+does not provide the organization for a bare team slug. CLI parsing turns
+team values into `TeamScope(org, slug)` objects, then the use case calls
 `GET /orgs/{org}/teams/{slug}/repos` and expands the result into the same
 parenthesized OR repo group used by explicit repeated `--repo` flags. The
 use case bounds each team at `MAX_TEAM_REPO_QUALIFIERS + 1` with

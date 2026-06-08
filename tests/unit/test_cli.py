@@ -7,7 +7,7 @@ import respx
 from typer.testing import CliRunner
 from untaped.settings import get_settings
 
-from untaped_github import app
+from untaped_github.cli import app
 
 
 @pytest.fixture(autouse=True)
