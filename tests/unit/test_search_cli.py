@@ -12,7 +12,7 @@ import respx
 from typer.testing import CliRunner
 from untaped.settings import get_settings
 
-from untaped_github import app
+from untaped_github.cli import app
 
 
 @pytest.fixture(autouse=True)
@@ -231,12 +231,12 @@ def test_search_repos_team_resolution(tmp_path: Path, monkeypatch: pytest.Monkey
         )
         result = CliRunner().invoke(
             app,
-            ["search", "repos", "--org", "acme", "--team", "backend", "--format", "json"],
+            ["search", "repos", "--team", "acme/backend", "--format", "json"],
         )
 
     assert result.exit_code == 0, result.output
     sent_q = search_route.calls[0].request.url.params["q"]
-    assert sent_q == "org:acme (repo:acme/api OR repo:acme/web)"
+    assert sent_q == "(repo:acme/api OR repo:acme/web)"
 
 
 def test_search_code_accepts_org_qualified_team_scope(
@@ -328,33 +328,28 @@ def test_search_code_accepts_repeated_team_scopes(
     assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:platform/deploy)"
 
 
-def test_search_code_keeps_slug_team_with_single_org(
+def test_search_code_rejects_slug_team_with_single_org(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
 
-    with respx.mock(base_url="https://api.github.com") as mock:
-        mock.get("/orgs/acme/teams/backend/repos").mock(
-            return_value=httpx.Response(200, json=[{"full_name": "acme/api"}])
-        )
-        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
-        result = CliRunner().invoke(
-            app,
-            [
-                "search",
-                "code",
-                "TODO",
-                "--org",
-                "acme",
-                "--team",
-                "backend",
-                "--format",
-                "json",
-            ],
-        )
+    result = CliRunner().invoke(
+        app,
+        [
+            "search",
+            "code",
+            "TODO",
+            "--org",
+            "acme",
+            "--team",
+            "backend",
+            "--format",
+            "json",
+        ],
+    )
 
-    assert result.exit_code == 0, result.output
-    assert route.calls[0].request.url.params["q"] == "TODO org:acme repo:acme/api"
+    assert result.exit_code != 0
+    assert "ORG/SLUG" in result.output
 
 
 def test_search_code_passes_query_and_filters(
@@ -806,18 +801,25 @@ def test_search_team_without_org_errors(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
     result = CliRunner().invoke(app, ["search", "repos", "--team", "backend"])
     assert result.exit_code != 0
-    assert "team" in result.output.lower() or "team" in str(result.exception).lower()
+    assert "ORG/SLUG" in result.output
 
 
-def test_search_team_with_multiple_orgs_errors(
+def test_search_team_with_extra_path_segment_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Multiple --org with --team used to silently pick the first; must
-    # now fail loudly so the user knows which org scoped the lookup.
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    result = CliRunner().invoke(app, ["search", "repos", "--team", "acme/backend/extra"])
+    assert result.exit_code != 0
+    assert "ORG/SLUG" in result.output
+
+
+def test_search_team_slug_with_multiple_orgs_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
     result = CliRunner().invoke(
         app,
         ["search", "repos", "--org", "a", "--org", "b", "--team", "backend"],
     )
     assert result.exit_code != 0
-    assert "single --org" in result.output
+    assert "ORG/SLUG" in result.output

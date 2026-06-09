@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 import respx
 from pydantic import SecretStr
 
@@ -41,6 +42,11 @@ def test_list_org_repos_paginates_visible_repositories() -> None:
             repos = list(client.list_org_repos("acme"))
 
     assert repos == [{"full_name": "acme/site"}]
+
+
+def test_search_code_does_not_accept_sort_parameter() -> None:
+    with _client() as client, pytest.raises(TypeError):
+        client.search_code("TODO", sort="updated")  # type: ignore[call-arg]
 
 
 def test_list_matching_refs_returns_branch_and_tag_refs() -> None:

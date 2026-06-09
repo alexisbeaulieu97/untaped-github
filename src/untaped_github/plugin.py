@@ -7,7 +7,7 @@ from pathlib import Path
 
 from untaped.plugins import PluginRegistry, SkillSpec
 
-from untaped_github import app
+from untaped_github.cli import app
 from untaped_github.settings import GithubSettings
 
 

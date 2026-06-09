@@ -21,7 +21,8 @@ Use this skill when the user wants an agent to operate `untaped github` for auth
 - `untaped github search code` searches code and does not support sort.
 - `untaped github search issues` searches issues and pull requests.
 - `untaped github search users` searches users and organizations.
-- Search commands support scoped selectors such as `--user`, repeatable `--org`, repeatable `--repo`, and `--team` where applicable.
+- Search commands support scoped selectors such as `--user`, repeatable `--org`, repeatable `--repo`, and repeatable `--team ORG/SLUG` where applicable.
+- Always include the owning organization in the `--team` value.
 
 ## Agent Guidance
 

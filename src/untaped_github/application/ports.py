@@ -27,9 +27,7 @@ class GithubSearchService(Protocol):
         self, q: str, *, sort: str | None = None, limit: int | None = None
     ) -> Iterator[dict[str, Any]]: ...
 
-    def search_code(
-        self, q: str, *, sort: str | None = None, limit: int | None = None
-    ) -> Iterator[dict[str, Any]]: ...
+    def search_code(self, q: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]: ...
 
     def search_issues(
         self, q: str, *, sort: str | None = None, limit: int | None = None

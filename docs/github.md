@@ -77,9 +77,8 @@ Common flags for `repos`, `code`, and `issues`:
 | `--format`    | `table` (default), `json`, `yaml`, `raw`.                            |
 | `--columns`   | Repeatable; dotted paths supported.                                  |
 
-`--team SLUG --org ORG` is still accepted, but docs prefer the
-self-contained `--team ORG/SLUG` form so each team scope can be copied
-or repeated without depending on another flag.
+`--team` must be self-contained as `ORG/SLUG`; `--org` remains a search
+qualifier and does not provide the organization for a bare team slug.
 
 Repository-specific: `--name`, `--language`, `--archived/--no-archived`,
 `--fork/--no-fork`, `--visibility public|private`, `--sort stars|forks|updated`.

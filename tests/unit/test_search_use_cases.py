@@ -43,10 +43,8 @@ class _StubSearch:
     ) -> Iterator[dict[str, Any]]:
         return self._record("repos", q, sort=sort, limit=limit)
 
-    def search_code(
-        self, q: str, *, sort: str | None = None, limit: int | None = None
-    ) -> Iterator[dict[str, Any]]:
-        return self._record("code", q, sort=sort, limit=limit)
+    def search_code(self, q: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        return self._record("code", q, sort=None, limit=limit)
 
     def search_issues(
         self, q: str, *, sort: str | None = None, limit: int | None = None
@@ -221,6 +219,15 @@ def test_search_code_flattens_repository_into_repo() -> None:
     [row] = list(use_case(CodeSearchFilters(raw_query="TODO")))
     assert row.repo == "me/proj"
     assert row.path == "src/main.py"
+
+
+def test_search_code_does_not_send_sort_to_search_service() -> None:
+    search = _StubSearch([])
+    use_case = SearchCode(_stub(search), _teams(_StubTeams()))
+
+    list(use_case(CodeSearchFilters(raw_query="TODO", limit=5)))
+
+    assert search.calls == [("code", "TODO user:@me", None, 5)]
 
 
 # --- SearchIssues -------------------------------------------------------

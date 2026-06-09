@@ -41,10 +41,9 @@ def _repo_scope(repos: tuple[str, ...]) -> str | None:
 class _QueryBase(BaseModel):
     """Fields shared by every search type."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     raw_query: str | None = None
-    sort: str | None = None
     # ``None`` means unbounded (paginate until exhausted or GitHub's
     # 1000-result cap). The CLI always supplies an int; non-CLI
     # callers (tests, programmatic use) may still pass ``None``.

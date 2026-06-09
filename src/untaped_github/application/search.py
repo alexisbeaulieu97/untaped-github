@@ -17,10 +17,10 @@ from untaped_github.domain import (
     IssueSearchFilters,
     RepoResult,
     RepoSearchFilters,
-    ScopedQueryBase,
     UserResult,
     UserSearchFilters,
 )
+from untaped_github.domain.queries import ScopedQueryBase
 
 WarnFn = Callable[[str], None]
 
@@ -85,7 +85,7 @@ def _apply_scope_defaults[F: ScopedQueryBase](filters: F, team_repos: tuple[str,
 _SearchMethod = Callable[..., Iterator[dict[str, Any]]]
 
 
-def _run_scoped_search[F: ScopedQueryBase, R: BaseModel](
+def _run_scoped_search[F: RepoSearchFilters | IssueSearchFilters, R: BaseModel](
     search_method: _SearchMethod,
     result_cls: type[R],
     teams: GithubTeamService,
@@ -151,14 +151,11 @@ class SearchCode:
         *,
         team_scopes: tuple[TeamScope, ...] = (),
     ) -> Iterator[CodeResult]:
-        return _run_scoped_search(
-            self._search.search_code,
-            CodeResult,
-            self._teams,
-            filters,
-            team_scopes=team_scopes,
-            warn=self._warn,
-        )
+        team_repos = _resolve_team_repos(self._teams, team_scopes=team_scopes, warn=self._warn)
+        effective = _apply_scope_defaults(filters, team_repos)
+        q = effective.to_query_string()
+        for row in self._search.search_code(q, limit=effective.limit):
+            yield CodeResult.model_validate(row)
 
 
 class SearchIssues:

@@ -73,10 +73,8 @@ class GithubClient:
     ) -> Iterator[dict[str, Any]]:
         return paginate_search(self._http, "/search/repositories", params=_q(q, sort), limit=limit)
 
-    def search_code(
-        self, q: str, *, sort: str | None = None, limit: int | None = None
-    ) -> Iterator[dict[str, Any]]:
-        return paginate_search(self._http, "/search/code", params=_q(q, sort), limit=limit)
+    def search_code(self, q: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        return paginate_search(self._http, "/search/code", params=_q(q), limit=limit)
 
     def search_issues(
         self, q: str, *, sort: str | None = None, limit: int | None = None
@@ -106,7 +104,7 @@ class GithubClient:
         self.close()
 
 
-def _q(query: str, sort: str | None) -> dict[str, str]:
+def _q(query: str, sort: str | None = None) -> dict[str, str]:
     params = {"q": query}
     if sort:
         params["sort"] = sort
