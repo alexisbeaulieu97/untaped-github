@@ -59,9 +59,10 @@ def _parse_team_scopes(values: list[str] | None) -> tuple[TeamScope, ...]:
     """Parse repeatable ``--team`` values into explicit org/slug scopes."""
     scopes: list[TeamScope] = []
     for value in values or ():
-        org, sep, slug = value.partition("/")
-        if sep != "/" or not org or not slug:
+        parts = value.split("/")
+        if len(parts) != 2 or not all(parts):
             raise ConfigError("--team must be ORG/SLUG")
+        org, slug = parts
         scopes.append(TeamScope(org=org, slug=slug))
     return tuple(scopes)
 

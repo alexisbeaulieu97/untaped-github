@@ -7,6 +7,8 @@ import respx
 from typer.testing import CliRunner
 from untaped.settings import get_settings
 
+import untaped_github
+import untaped_github.domain
 from untaped_github.cli import app
 
 
@@ -37,6 +39,12 @@ def _write_missing_theme_config(tmp_path: Path) -> Path:
         "ui:\n  theme: missing\nprofiles:\n  default:\n    github:\n      token: ghp_test\n"
     )
     return cfg
+
+
+def test_root_package_public_surface_is_slim() -> None:
+    assert untaped_github.__all__ == ["GithubClient", "GithubSettings"]
+    assert not hasattr(untaped_github, "app")
+    assert "ScopedQueryBase" not in untaped_github.domain.__all__
 
 
 def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

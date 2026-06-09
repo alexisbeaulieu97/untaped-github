@@ -804,6 +804,15 @@ def test_search_team_without_org_errors(tmp_path: Path, monkeypatch: pytest.Monk
     assert "ORG/SLUG" in result.output
 
 
+def test_search_team_with_extra_path_segment_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    result = CliRunner().invoke(app, ["search", "repos", "--team", "acme/backend/extra"])
+    assert result.exit_code != 0
+    assert "ORG/SLUG" in result.output
+
+
 def test_search_team_slug_with_multiple_orgs_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
