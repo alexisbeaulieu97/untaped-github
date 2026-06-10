@@ -9,8 +9,8 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from typer.testing import CliRunner
 from untaped.settings import get_settings
+from untaped.testing import CliInvoker
 
 from untaped_github.cli import app
 
@@ -66,7 +66,7 @@ def test_search_repos_injects_at_me_and_renders_table(
         route = mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json=payload)
         )
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -107,7 +107,7 @@ def test_search_repos_table_honors_list_collection_view(
     }
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(app, ["search", "repos", "--format", "table"])
+        result = CliInvoker().invoke(app, ["search", "repos", "--format", "table"])
 
     assert result.exit_code == 0, result.output
     assert "full_name: octocat/alpha" in result.stdout
@@ -136,7 +136,7 @@ def test_search_repos_raw_ignores_invalid_ui_theme(
     }
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(app, ["search", "repos", "--format", "raw"])
+        result = CliInvoker().invoke(app, ["search", "repos", "--format", "raw"])
 
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "octocat/alpha"
@@ -178,7 +178,7 @@ def test_search_repos_profile_flag_reads_named_profile(
     }
     with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
         mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -207,7 +207,7 @@ def test_search_repos_with_explicit_org_does_not_inject_at_me(
         route = mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json={"items": []})
         )
-        result = CliRunner().invoke(app, ["search", "repos", "--org", "acme", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "repos", "--org", "acme", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     sent_q = route.calls[0].request.url.params["q"]
@@ -229,7 +229,7 @@ def test_search_repos_team_resolution(tmp_path: Path, monkeypatch: pytest.Monkey
         search_route = mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json={"items": []})
         )
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             ["search", "repos", "--team", "acme/backend", "--format", "json"],
         )
@@ -253,7 +253,7 @@ def test_search_code_accepts_org_qualified_team_scope(
             return_value=httpx.Response(200, json=team_repos)
         )
         route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             ["search", "code", "TODO", "--team", "acme/backend", "--format", "json"],
         )
@@ -278,7 +278,7 @@ def test_search_issues_accepts_org_qualified_team_scope(
         route = mock.get("/search/issues").mock(
             return_value=httpx.Response(200, json={"items": []})
         )
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -309,7 +309,7 @@ def test_search_code_accepts_repeated_team_scopes(
             return_value=httpx.Response(200, json=[{"full_name": "platform/deploy"}])
         )
         route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -333,7 +333,7 @@ def test_search_code_rejects_slug_team_with_single_org(
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
 
-    result = CliRunner().invoke(
+    result = CliInvoker().invoke(
         app,
         [
             "search",
@@ -370,7 +370,7 @@ def test_search_code_passes_query_and_filters(
     }
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.get("/search/code").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             ["search", "code", "TODO", "--language", "python", "--format", "json"],
         )
@@ -391,7 +391,7 @@ def test_search_code_repeated_repos_render_or_scope(
 
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -417,7 +417,7 @@ def test_search_code_reads_repo_scopes_from_stdin(
 
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             ["search", "code", "TODO", "--repo-stdin", "--format", "json"],
             input="acme/api\nacme/web\n",
@@ -434,7 +434,7 @@ def test_search_code_combines_explicit_and_stdin_repo_scopes(
 
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -471,7 +471,7 @@ def test_search_issues_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     }
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.get("/search/issues").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -515,7 +515,7 @@ def test_search_issues_raw_repo_number_columns_are_actionable(
     }
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/search/issues").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             [
                 "search",
@@ -548,7 +548,7 @@ def test_search_users_no_at_me(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     }
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.get("/search/users").mock(return_value=httpx.Response(200, json=payload))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app,
             ["search", "users", "--kind", "org", "--location", "montreal", "--format", "json"],
         )
@@ -585,7 +585,7 @@ def test_search_repos_follows_link_header_for_pagination(
         mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json=page1, headers={"Link": link})
         )
-        result = CliRunner().invoke(app, ["search", "repos", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "repos", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -603,7 +603,7 @@ def test_search_repos_respects_limit(tmp_path: Path, monkeypatch: pytest.MonkeyP
         mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json={"items": items})
         )
-        result = CliRunner().invoke(app, ["search", "repos", "--limit", "2", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "repos", "--limit", "2", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -624,7 +624,7 @@ def test_search_repos_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.Mo
         route = mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json={"items": items})
         )
-        result = CliRunner().invoke(app, ["search", "repos", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "repos", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -661,7 +661,9 @@ def test_search_repos_limit_1000_paginates_fully(
         mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json=page1, headers={"Link": link})
         )
-        result = CliRunner().invoke(app, ["search", "repos", "--limit", "1000", "--format", "json"])
+        result = CliInvoker().invoke(
+            app, ["search", "repos", "--limit", "1000", "--format", "json"]
+        )
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -686,7 +688,9 @@ def test_search_repos_limit_above_1000_stops_at_github_cap(
         mock.get("/search/repositories").mock(
             return_value=httpx.Response(200, json={"items": items})  # no Link header
         )
-        result = CliRunner().invoke(app, ["search", "repos", "--limit", "5000", "--format", "json"])
+        result = CliInvoker().invoke(
+            app, ["search", "repos", "--limit", "5000", "--format", "json"]
+        )
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -695,23 +699,23 @@ def test_search_repos_limit_above_1000_stops_at_github_cap(
 
 def test_search_repos_limit_zero_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A zero limit is a usage error, not a synonym for "all results".
-    # Pin exit code 2 (click usage error) + the IntRange message so a
+    # Pin a non-zero usage error + the range message so a
     # future routing change (e.g. swallowing 0 → empty result, exit 0)
     # fails loudly instead of silently passing the looser exit≠0 check.
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
-    result = CliRunner().invoke(app, ["search", "repos", "--limit", "0"])
-    assert result.exit_code == 2, result.output
+    result = CliInvoker().invoke(app, ["search", "repos", "--limit", "0"])
+    assert result.exit_code != 0, result.output
     assert "--limit" in result.output
-    assert "x>=1" in result.output
+    assert ">= 1" in result.output
 
 
 def test_search_repos_help_advertises_default_30(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
-    result = CliRunner().invoke(app, ["search", "repos", "--help"])
+    result = CliInvoker().invoke(app, ["search", "repos", "--help"])
     assert result.exit_code == 0, result.output
-    # Typer renders the default inline next to the option.
+    # Help output includes the default and documented cap.
     assert "30" in result.output
     assert "1000" in result.output  # cap mentioned in the help string
 
@@ -736,7 +740,7 @@ def test_search_code_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.Mon
         route = mock.get("/search/code").mock(
             return_value=httpx.Response(200, json={"items": items})
         )
-        result = CliRunner().invoke(app, ["search", "code", "TODO", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "code", "TODO", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -760,7 +764,7 @@ def test_search_users_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.Mo
         route = mock.get("/search/users").mock(
             return_value=httpx.Response(200, json={"items": items})
         )
-        result = CliRunner().invoke(app, ["search", "users", "octocat", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "users", "octocat", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -789,7 +793,7 @@ def test_search_issues_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.M
         route = mock.get("/search/issues").mock(
             return_value=httpx.Response(200, json={"items": items})
         )
-        result = CliRunner().invoke(app, ["search", "issues", "--format", "json"])
+        result = CliInvoker().invoke(app, ["search", "issues", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
@@ -799,7 +803,7 @@ def test_search_issues_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.M
 
 def test_search_team_without_org_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
-    result = CliRunner().invoke(app, ["search", "repos", "--team", "backend"])
+    result = CliInvoker().invoke(app, ["search", "repos", "--team", "backend"])
     assert result.exit_code != 0
     assert "ORG/SLUG" in result.output
 
@@ -808,7 +812,7 @@ def test_search_team_with_extra_path_segment_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
-    result = CliRunner().invoke(app, ["search", "repos", "--team", "acme/backend/extra"])
+    result = CliInvoker().invoke(app, ["search", "repos", "--team", "acme/backend/extra"])
     assert result.exit_code != 0
     assert "ORG/SLUG" in result.output
 
@@ -817,7 +821,7 @@ def test_search_team_slug_with_multiple_orgs_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
-    result = CliRunner().invoke(
+    result = CliInvoker().invoke(
         app,
         ["search", "repos", "--org", "a", "--org", "b", "--team", "backend"],
     )

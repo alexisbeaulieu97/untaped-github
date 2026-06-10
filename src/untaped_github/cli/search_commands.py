@@ -1,4 +1,4 @@
-"""Typer sub-app: ``untaped github search``.
+"""Cyclopts sub-app: ``untaped github search``.
 
 Four subcommands, one per GitHub search endpoint. Each builds a frozen
 filter object from CLI flags, hands it to its use case, and pipes the
@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-import typer
+from cyclopts import Parameter, validators
 from untaped import (
     ColumnsOption,
     ConfigError,
     FormatOption,
     ProfileOverrideOption,
+    create_app,
+    echo,
     read_identifiers,
     report_errors,
 )
@@ -29,30 +31,45 @@ from untaped_github.cli._rendering import render_rows
 # here rather than in untaped's option aliases.
 SearchLimitOption = Annotated[
     int,
-    typer.Option(
-        "--limit",
-        min=1,
+    Parameter(
+        name="--limit",
+        validator=validators.Number(gte=1),
         help=(
             "Cap result count. GitHub enforces a hard 1000-result cap "
             "on search; pass --limit 1000 to opt into the maximum."
         ),
     ),
 ]
+FreeTextArgument = Annotated[str | None, Parameter(help="Free-text query (passed verbatim).")]
+UserOption = Annotated[
+    str | None,
+    Parameter(name="--user", help="user:<login>. Defaults to @me when no other scope is set."),
+]
+OrgOption = Annotated[
+    list[str] | None,
+    Parameter(name="--org", help="GitHub org scope. Repeatable.", consume_multiple=False),
+]
+TeamOption = Annotated[
+    list[str] | None,
+    Parameter(name="--team", help="Team ORG/SLUG. Repeatable.", consume_multiple=False),
+]
+RepoOption = Annotated[
+    list[str] | None,
+    Parameter(name="--repo", help="repo:owner/name. Repeatable.", consume_multiple=False),
+]
+RepoStdinOption = Annotated[
+    bool,
+    Parameter(name="--repo-stdin", help="Read repo scopes from stdin."),
+]
 
-app = typer.Typer(
+app = create_app(
     name="search",
     help="Search GitHub for repos, code, issues, and users.",
-    no_args_is_help=True,
 )
 
 
-@app.callback()
-def _callback() -> None:
-    """Search GitHub for repos, code, issues, and users."""
-
-
 def _stderr_warn(message: str) -> None:
-    typer.echo(f"warning: {message}", err=True)
+    echo(f"warning: {message}", err=True)
 
 
 def _parse_team_scopes(values: list[str] | None) -> tuple[TeamScope, ...]:
@@ -75,28 +92,33 @@ def _repo_scopes(values: list[str] | None, *, repo_stdin: bool) -> tuple[str, ..
     return tuple(repos)
 
 
-@app.command("repos", no_args_is_help=False)
+@app.command(name="repos")
 def repos_command(
-    query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
-    user: str | None = typer.Option(
-        None, "--user", help="user:<login>. Defaults to @me when no other scope is set."
-    ),
-    org: list[str] | None = typer.Option(None, "--org", help="org:<name>. Repeatable."),
-    team: list[str] | None = typer.Option(
-        None,
-        "--team",
-        help="Team ORG/SLUG. Repeatable.",
-    ),
-    repo: list[str] | None = typer.Option(None, "--repo", help="repo:owner/name. Repeatable."),
-    repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
-    name: str | None = typer.Option(None, "--name", help="Match against repo name (in:name)."),
-    language: str | None = typer.Option(None, "--language"),
-    archived: bool | None = typer.Option(None, "--archived/--no-archived"),
-    fork: bool | None = typer.Option(None, "--fork/--no-fork"),
-    visibility: Literal["public", "private"] | None = typer.Option(None, "--visibility"),
-    sort: Literal["stars", "forks", "help-wanted-issues", "updated"] | None = typer.Option(
-        None, "--sort"
-    ),
+    query: FreeTextArgument = None,
+    *,
+    user: UserOption = None,
+    org: OrgOption = None,
+    team: TeamOption = None,
+    repo: RepoOption = None,
+    repo_stdin: RepoStdinOption = False,
+    name: Annotated[
+        str | None,
+        Parameter(name="--name", help="Match against repo name (in:name)."),
+    ] = None,
+    language: Annotated[str | None, Parameter(name="--language")] = None,
+    archived: Annotated[
+        bool | None,
+        Parameter(name="--archived", negative="--no-archived"),
+    ] = None,
+    fork: Annotated[bool | None, Parameter(name="--fork", negative="--no-fork")] = None,
+    visibility: Annotated[
+        Literal["public", "private"] | None,
+        Parameter(name="--visibility"),
+    ] = None,
+    sort: Annotated[
+        Literal["stars", "forks", "help-wanted-issues", "updated"] | None,
+        Parameter(name="--sort"),
+    ] = None,
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
@@ -124,21 +146,22 @@ def repos_command(
             use_case = SearchRepos(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
+        echo(render_rows(rows, fmt=fmt, columns=columns))
 
 
-@app.command("code", no_args_is_help=False)
+@app.command(name="code")
 def code_command(
-    query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
-    user: str | None = typer.Option(None, "--user"),
-    org: list[str] | None = typer.Option(None, "--org", help="Repeatable."),
-    team: list[str] | None = typer.Option(None, "--team", help="Team ORG/SLUG. Repeatable."),
-    repo: list[str] | None = typer.Option(None, "--repo", help="Repeatable."),
-    repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
-    language: str | None = typer.Option(None, "--language"),
-    filename: str | None = typer.Option(None, "--filename"),
-    path: str | None = typer.Option(None, "--path"),
-    extension: str | None = typer.Option(None, "--extension"),
+    query: FreeTextArgument = None,
+    *,
+    user: Annotated[str | None, Parameter(name="--user")] = None,
+    org: OrgOption = None,
+    team: TeamOption = None,
+    repo: RepoOption = None,
+    repo_stdin: RepoStdinOption = False,
+    language: Annotated[str | None, Parameter(name="--language")] = None,
+    filename: Annotated[str | None, Parameter(name="--filename")] = None,
+    path: Annotated[str | None, Parameter(name="--path")] = None,
+    extension: Annotated[str | None, Parameter(name="--extension")] = None,
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
@@ -169,25 +192,31 @@ def code_command(
             use_case = SearchCode(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
+        echo(render_rows(rows, fmt=fmt, columns=columns))
 
 
-@app.command("issues", no_args_is_help=False)
+@app.command(name="issues")
 def issues_command(
-    query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
-    user: str | None = typer.Option(None, "--user"),
-    org: list[str] | None = typer.Option(None, "--org", help="Repeatable."),
-    team: list[str] | None = typer.Option(None, "--team", help="Team ORG/SLUG. Repeatable."),
-    repo: list[str] | None = typer.Option(None, "--repo", help="Repeatable."),
-    repo_stdin: bool = typer.Option(False, "--repo-stdin", help="Read repo scopes from stdin."),
-    state: Literal["open", "closed"] | None = typer.Option(None, "--state"),
-    kind: Literal["issue", "pr"] | None = typer.Option(None, "--kind"),
-    author: str | None = typer.Option(None, "--author"),
-    assignee: str | None = typer.Option(None, "--assignee"),
-    label: list[str] | None = typer.Option(None, "--label", help="Repeatable."),
-    mentions: str | None = typer.Option(None, "--mentions"),
-    sort: Literal["comments", "reactions", "interactions", "created", "updated"]
-    | None = typer.Option(None, "--sort"),
+    query: FreeTextArgument = None,
+    *,
+    user: Annotated[str | None, Parameter(name="--user")] = None,
+    org: OrgOption = None,
+    team: TeamOption = None,
+    repo: RepoOption = None,
+    repo_stdin: RepoStdinOption = False,
+    state: Annotated[Literal["open", "closed"] | None, Parameter(name="--state")] = None,
+    kind: Annotated[Literal["issue", "pr"] | None, Parameter(name="--kind")] = None,
+    author: Annotated[str | None, Parameter(name="--author")] = None,
+    assignee: Annotated[str | None, Parameter(name="--assignee")] = None,
+    label: Annotated[
+        list[str] | None,
+        Parameter(name="--label", help="Repeatable.", consume_multiple=False),
+    ] = None,
+    mentions: Annotated[str | None, Parameter(name="--mentions")] = None,
+    sort: Annotated[
+        Literal["comments", "reactions", "interactions", "created", "updated"] | None,
+        Parameter(name="--sort"),
+    ] = None,
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
@@ -216,16 +245,20 @@ def issues_command(
             use_case = SearchIssues(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
+        echo(render_rows(rows, fmt=fmt, columns=columns))
 
 
-@app.command("users", no_args_is_help=False)
+@app.command(name="users")
 def users_command(
-    query: str | None = typer.Argument(None, help="Free-text query (passed verbatim)."),
-    kind: Literal["user", "org"] | None = typer.Option(None, "--kind"),
-    location: str | None = typer.Option(None, "--location"),
-    language: str | None = typer.Option(None, "--language"),
-    sort: Literal["followers", "repositories", "joined"] | None = typer.Option(None, "--sort"),
+    query: FreeTextArgument = None,
+    *,
+    kind: Annotated[Literal["user", "org"] | None, Parameter(name="--kind")] = None,
+    location: Annotated[str | None, Parameter(name="--location")] = None,
+    language: Annotated[str | None, Parameter(name="--language")] = None,
+    sort: Annotated[
+        Literal["followers", "repositories", "joined"] | None,
+        Parameter(name="--sort"),
+    ] = None,
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
@@ -246,4 +279,4 @@ def users_command(
         )
         with open_client(profile) as client:
             rows = [r.model_dump() for r in SearchUsers(client)(filters)]
-        typer.echo(render_rows(rows, fmt=fmt, columns=columns))
+        echo(render_rows(rows, fmt=fmt, columns=columns))

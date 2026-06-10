@@ -13,7 +13,7 @@ from untaped_github.settings import GithubSettings
 
 class GithubPlugin:
     id = "github"
-    untaped_api_version = 1
+    untaped_api_version = 2
 
     def register(self, registry: PluginRegistry) -> None:
         registry.add_profile_settings("github", GithubSettings)

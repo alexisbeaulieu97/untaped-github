@@ -4,8 +4,8 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from typer.testing import CliRunner
 from untaped.settings import get_settings
+from untaped.testing import CliInvoker
 
 import untaped_github
 import untaped_github.domain
@@ -53,7 +53,7 @@ def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
-        result = CliRunner().invoke(app, ["whoami", "--format", "raw", "--columns", "login"])
+        result = CliInvoker().invoke(app, ["whoami", "--format", "raw", "--columns", "login"])
 
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "octocat"
@@ -67,7 +67,7 @@ def test_whoami_table_honors_list_collection_view(
 
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
-        result = CliRunner().invoke(app, ["whoami", "--format", "table"])
+        result = CliInvoker().invoke(app, ["whoami", "--format", "table"])
 
     assert result.exit_code == 0, result.output
     assert "login: octocat" in result.stdout
@@ -84,7 +84,7 @@ def test_whoami_raw_ignores_invalid_ui_theme(
 
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
-        result = CliRunner().invoke(app, ["whoami", "--format", "raw"])
+        result = CliInvoker().invoke(app, ["whoami", "--format", "raw"])
 
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "octocat"
@@ -113,7 +113,7 @@ def test_whoami_profile_flag_reads_named_profile(
 
     with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
         mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app, ["whoami", "--profile", "stage", "--format", "raw", "--columns", "login"]
         )
 
@@ -123,7 +123,7 @@ def test_whoami_profile_flag_reads_named_profile(
 
 def test_whoami_requires_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(tmp_path / "missing.yml"))
-    result = CliRunner().invoke(app, ["whoami"])
+    result = CliInvoker().invoke(app, ["whoami"])
     assert result.exit_code != 0
     assert "token" in str(result.exception) or "token" in result.output
 
@@ -132,6 +132,6 @@ def test_whoami_rejects_blank_token(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     cfg = tmp_path / "config.yml"
     cfg.write_text('profiles:\n  default:\n    github:\n      token: "   "\n')
     monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
-    result = CliRunner().invoke(app, ["whoami"])
+    result = CliInvoker().invoke(app, ["whoami"])
     assert result.exit_code != 0
     assert "token" in str(result.exception) or "token" in result.output
