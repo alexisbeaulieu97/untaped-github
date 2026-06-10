@@ -32,8 +32,11 @@ primitives, and shared errors.
 7. **Every source module has a module docstring.** Re-export `__init__.py`
    files are exempt.
 8. **Cyclopts command signatures are explicit.** Use
-   `Annotated[..., Parameter(...)]`, name documented commands/options
-   explicitly, and add manual bare-command help only when required.
+   `Annotated[..., Parameter(...)]` and name documented commands/options
+   explicitly. Required inputs are required positional-only params
+   (`Parameter(help=...)` before `/`); a missing value renders
+   `error: ... requires an argument` (exit 2) automatically — never an
+   optional default plus a manual help dance.
 9. **stdout is data only.** Prompts, progress, and status messages go to
    stderr via `echo(..., err=True)`.
 10. **Pipe-friendly commands keep stable raw first-key identifiers.** These

@@ -8,11 +8,11 @@ from untaped import (
     ProfileOverrideOption,
     create_app,
     echo,
+    render_rows,
     report_errors,
 )
 
 from untaped_github.cli._client import open_client
-from untaped_github.cli._rendering import render_rows
 from untaped_github.cli.search_commands import app as search_app
 
 app = create_app(

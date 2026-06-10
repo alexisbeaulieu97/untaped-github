@@ -2,7 +2,7 @@
 
 Four subcommands, one per GitHub search endpoint. Each builds a frozen
 filter object from CLI flags, hands it to its use case, and pipes the
-result through the package-local row renderer. Composition lives here;
+result through core's ``render_rows`` helper. Composition lives here;
 the use cases own the orchestration.
 """
 
@@ -19,12 +19,12 @@ from untaped import (
     create_app,
     echo,
     read_identifiers,
+    render_rows,
     report_errors,
 )
 
 from untaped_github.application import TeamScope
 from untaped_github.cli._client import open_client
-from untaped_github.cli._rendering import render_rows
 
 # Shared across all four search subcommands. GitHub-specific (the
 # 1000-result cap belongs to GitHub, not untaped), so it lives
