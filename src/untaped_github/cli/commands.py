@@ -1,28 +1,29 @@
-"""Typer commands for the GitHub domain."""
+"""Cyclopts commands for the GitHub domain."""
 
 from __future__ import annotations
 
-import typer
-from untaped import ColumnsOption, FormatOption, ProfileOverrideOption, report_errors
+from untaped import (
+    ColumnsOption,
+    FormatOption,
+    ProfileOverrideOption,
+    create_app,
+    echo,
+    render_rows,
+    report_errors,
+)
 
 from untaped_github.cli._client import open_client
-from untaped_github.cli._rendering import render_rows
 from untaped_github.cli.search_commands import app as search_app
 
-app = typer.Typer(
+app = create_app(
     name="github",
     help="Inspect and search GitHub from the authenticated user's account.",
-    no_args_is_help=True,
 )
 
 
-@app.callback()
-def _callback() -> None:
-    """Inspect and search GitHub from the authenticated user's account."""
-
-
-@app.command("whoami")
+@app.command(name="whoami")
 def whoami_command(
+    *,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
     profile: ProfileOverrideOption = None,
@@ -32,7 +33,7 @@ def whoami_command(
 
     with report_errors(), open_client(profile) as client:
         user = WhoAmI(client)()
-        typer.echo(render_rows([user.model_dump()], fmt=fmt, columns=columns))
+        echo(render_rows([user.model_dump()], fmt=fmt, columns=columns))
 
 
-app.add_typer(search_app, name="search")
+app.command(search_app, name="search")

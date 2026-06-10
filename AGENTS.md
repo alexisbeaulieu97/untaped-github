@@ -21,7 +21,7 @@ primitives, and shared errors.
 3. **Expose the plugin through the `untaped.plugins` entry point.**
    `github = "untaped_github.plugin:plugin"` is the public integration point.
    The plugin object must expose `id = "github"`, literal
-   `untaped_api_version = 1`, and `register(registry)`.
+   `untaped_api_version = 2`, and `register(registry)`.
 4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
    `infrastructure -> domain`; `application` and `infrastructure` must not
    import each other at runtime.
@@ -31,10 +31,14 @@ primitives, and shared errors.
    never relative imports.
 7. **Every source module has a module docstring.** Re-export `__init__.py`
    files are exempt.
-8. **Every Typer app and every command with required args sets
-   `no_args_is_help=True`.**
+8. **Cyclopts command signatures are explicit.** Use
+   `Annotated[..., Parameter(...)]` and name documented commands/options
+   explicitly. Required inputs are required positional-only params
+   (`Parameter(help=...)` before `/`); a missing value renders
+   `error: ... requires an argument` (exit 2) automatically — never an
+   optional default plus a manual help dance.
 9. **stdout is data only.** Prompts, progress, and status messages go to
-   stderr via `typer.echo(..., err=True)`.
+   stderr via `echo(..., err=True)`.
 10. **Pipe-friendly commands keep stable raw first-key identifiers.** These
     raw first-key contracts are load-bearing: `GithubUser` starts with
     `login`; repo search rows start with `full_name`; issue search rows
@@ -61,14 +65,14 @@ src/untaped_github/
 ├── __init__.py           # small root API: GithubClient, GithubSettings
 ├── plugin.py             # entry-point plugin object
 ├── settings.py           # plugin-owned config model
-├── cli/                  # Typer commands; composition root
+├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
 ├── domain/               # pure models and query value objects
 └── infrastructure/       # GitHub REST client and pagination
 ```
 
 The plugin object registers `GithubSettings` as the `github` profile
-settings section, mounts the Typer app as the root `github` command, and
+settings section, mounts the Cyclopts app as the root `github` command, and
 registers the packaged `untaped-github` agent skill. Plugin code reads typed
 settings with
 `get_config_section("github", GithubSettings)`, not a global aggregate
@@ -141,7 +145,7 @@ Future high-volume features should honor `X-RateLimit-Remaining` and
 
 ## Search
 
-`search` is a Typer sub-app mounted on the root `github` app, with one
+`search` is a Cyclopts sub-app mounted on the root `github` app, with one
 subcommand per GitHub search endpoint:
 
 | Subcommand     | Endpoint               | Key filters |
@@ -248,7 +252,7 @@ coverage gate.
 3. Add a domain model or query value object in `domain/` when needed.
 4. Add the HTTP method to `infrastructure/github_client.py` and keep
    pagination details in `infrastructure/pagination.py`.
-5. Wire the Typer command in `cli/commands.py` or `cli/search_commands.py`;
+5. Wire the Cyclopts command in `cli/commands.py` or `cli/search_commands.py`;
    keep stdout data-only and expose `--format`/`--columns` for data output.
 6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.
 7. Run `uv run untaped github <command> --help` plus the full verification

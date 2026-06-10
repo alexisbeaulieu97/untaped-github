@@ -11,11 +11,11 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from typer.testing import CliRunner
 from untaped import get_settings
 from untaped.main import build_app
 from untaped.plugins import PluginRegistry
 from untaped.settings import reset_config_registry_for_tests
+from untaped.testing import CliInvoker
 
 from untaped_github.plugin import plugin as github_plugin
 
@@ -46,10 +46,10 @@ def test_github_plugin_entry_point_is_declared() -> None:
 
 
 def test_github_plugin_declares_untaped_api_version() -> None:
-    assert github_plugin.untaped_api_version == 1
+    assert github_plugin.untaped_api_version == 2
 
 
-def test_untaped_source_tracks_core_git_source_without_stale_revision() -> None:
+def test_untaped_source_tracks_core_default_branch() -> None:
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
     source = data["tool"]["uv"]["sources"]["untaped"]
 
@@ -59,7 +59,7 @@ def test_untaped_source_tracks_core_git_source_without_stale_revision() -> None:
 def test_root_app_can_register_github_plugin() -> None:
     app = build_app(plugins=[github_plugin])
 
-    result = CliRunner().invoke(app, ["github", "--help"])
+    result = CliInvoker().invoke(app, ["github", "--help"])
 
     assert result.exit_code == 0, result.output
     assert "Inspect and search GitHub" in result.output
@@ -78,7 +78,7 @@ def test_github_plugin_registers_agent_skill() -> None:
 def test_config_list_includes_registered_github_settings() -> None:
     app = build_app(plugins=[github_plugin])
 
-    result = CliRunner().invoke(app, ["config", "list", "--format", "raw", "--columns", "key"])
+    result = CliInvoker().invoke(app, ["config", "list", "--format", "raw", "--columns", "key"])
 
     assert result.exit_code == 0, result.output
     assert "github.base_url" in result.stdout
@@ -89,7 +89,7 @@ def test_config_list_redacts_github_token(_isolate_config: Path) -> None:
     _isolate_config.write_text("profiles:\n  default:\n    github:\n      token: ghp_secret\n")
     app = build_app(plugins=[github_plugin])
 
-    result = CliRunner().invoke(
+    result = CliInvoker().invoke(
         app, ["config", "list", "--format", "raw", "--columns", "key", "--columns", "value"]
     )
 
@@ -104,7 +104,7 @@ def test_root_app_uses_registered_github_settings(_isolate_config: Path) -> None
 
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
-        result = CliRunner().invoke(
+        result = CliInvoker().invoke(
             app, ["github", "whoami", "--format", "raw", "--columns", "login"]
         )
 
