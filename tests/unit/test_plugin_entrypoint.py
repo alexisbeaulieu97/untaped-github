@@ -49,11 +49,14 @@ def test_github_plugin_declares_untaped_api_version() -> None:
     assert github_plugin.untaped_api_version == 2
 
 
-def test_untaped_source_tracks_local_core_checkout_for_migration() -> None:
+def test_untaped_source_tracks_core_migration_branch_for_pr_stack() -> None:
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
     source = data["tool"]["uv"]["sources"]["untaped"]
 
-    assert source == {"path": "../untaped", "editable": True}
+    assert source == {
+        "git": "https://github.com/alexisbeaulieu97/untaped",
+        "branch": "cyclopts-migration",
+    }
 
 
 def test_root_app_can_register_github_plugin() -> None:
