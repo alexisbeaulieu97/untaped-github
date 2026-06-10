@@ -68,7 +68,7 @@ src/untaped_github/
 ├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
 ├── domain/               # pure models and query value objects
-└── infrastructure/       # GitHub REST client and pagination
+└── infrastructure/       # GitHub REST/GraphQL client, pagination, graphql
 ```
 
 The plugin object registers `GithubSettings` as the `github` profile
@@ -124,11 +124,53 @@ TLS comes from `resolve_verify(http)` using core `HttpSettings`.
 ## Public Client API
 
 `untaped_github` intentionally re-exports `GithubClient` and
-`GithubSettings` for sibling plugins that need GitHub access. Keep this
-surface small and tested. Cross-plugin consumers may use repository
-metadata, org/team repository listing, matching refs, tree reads, and raw
-content reads. Add missing GitHub operations here rather than duplicating a
-GitHub client in another plugin or importing private CLI helpers.
+`GithubSettings` for sibling plugins that need GitHub access, plus the
+`batch_repo_refs` result models (`BatchRepoRefsResult`, `RepoRefs`,
+`RepoRef`). Keep this surface small and tested. Cross-plugin consumers
+may use repository metadata, org/team repository listing, matching refs,
+batched ref probing, tree reads, and raw content reads. Add missing
+GitHub operations here rather than duplicating a GitHub client in
+another plugin or importing private CLI helpers.
+
+## GraphQL Batched Ref Probe
+
+`GithubClient.batch_repo_refs(repos, *, kinds=("heads", "tags"),
+chunk_size=50)` probes branch/tag heads for many `owner/name` repos in
+few API calls (~1500 repos in ~30 POSTs at the default chunk size). It
+is the freshness probe consumed by sibling plugins instead of per-repo
+`git ls-remote`.
+
+Mechanics live in `infrastructure/graphql.py`, isolated the same way
+`pagination.py` isolates Link-header mechanics; `github_client.py` only
+wires `self._http.post_json(...)` at the derived endpoint. Load-bearing
+behaviors:
+
+- **Endpoint derivation is absolute.** `https://api.github.com` →
+  `https://api.github.com/graphql`; GHE `https://<host>/api/v3` →
+  `https://<host>/api/graphql`. The httpx client carries the REST
+  `base_url`, so a relative path would join to `/api/v3/graphql` on GHE.
+- **Aliases `r0..rN` map back to input order** within each chunk; each
+  chunk is one POST built from escaped GraphQL literals (`json.dumps`).
+- **Annotated tags are peeled.** The query selects nested
+  `target { oid }` two levels deep (covers tags-of-tags); `RepoRef.sha`
+  is always the commit oid, falling back to the outermost oid present.
+- **`kinds=("heads",)` omits the tags connection entirely**, halving the
+  per-repo point cost.
+- **Missing repos don't raise.** A `null` data node plus a `NOT_FOUND`
+  or `FORBIDDEN` error with `path: ["rX"]` lands the input full name in
+  `BatchRepoRefsResult.missing`; any other GraphQL error raises
+  `UntapedError`.
+- **Ref-pagination overflow** (>100 refs in a namespace) is followed
+  serially with single-repo `after: <cursor>` queries until exhausted.
+- **5xx split-retry.** GitHub intermittently 502s on large aliased
+  queries; the chunk is retried once split in half, and a half that
+  still 5xxs raises `HttpError`.
+
+GraphQL has its own 5000 points/hour budget (separate from REST), at
+roughly one point per repo per ref connection. A full heads+tags probe
+of 1500 repos costs ≈ 3000 points — callers should watch
+`BatchRepoRefsResult.rate_limit_remaining` (GraphQL
+`rateLimit.remaining`) and warn when the budget runs low.
 
 ## Rate Limiting
 
@@ -142,6 +184,9 @@ accept larger values, but the paginator stops once GitHub stops returning a
 
 Future high-volume features should honor `X-RateLimit-Remaining` and
 `X-RateLimit-Reset`, and back off on `429 Too Many Requests`.
+
+GraphQL (`batch_repo_refs`) draws on a separate 5000 points/hour budget;
+see "GraphQL Batched Ref Probe" below for cost math.
 
 ## Search
 
@@ -224,8 +269,10 @@ Two efficiency/defense rules are load-bearing:
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
   `SearchUsers`, and their `Protocol` ports. Scope defaulting and
   team-to-repo resolution live here.
-- `infrastructure/`: `GithubClient` and `pagination.py`. Adapters satisfy
-  application ports structurally and do not import `application`.
+- `infrastructure/`: `GithubClient`, `pagination.py` (REST Link-header
+  mechanics), and `graphql.py` (batched ref-probe query building and
+  response parsing). Adapters satisfy application ports structurally and
+  do not import `application`.
 - `cli/`: composition root. `cli/_client.open_client` reads the plugin config
   and returns a context-managed `GithubClient`; top-level commands use it.
 
@@ -251,7 +298,8 @@ coverage gate.
    service behavior.
 3. Add a domain model or query value object in `domain/` when needed.
 4. Add the HTTP method to `infrastructure/github_client.py` and keep
-   pagination details in `infrastructure/pagination.py`.
+   pagination details in `infrastructure/pagination.py` (REST) or query
+   building/response parsing in `infrastructure/graphql.py` (GraphQL).
 5. Wire the Cyclopts command in `cli/commands.py` or `cli/search_commands.py`;
    keep stdout data-only and expose `--format`/`--columns` for data output.
 6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.

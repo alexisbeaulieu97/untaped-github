@@ -1,0 +1,286 @@
+"""Aliased GraphQL queries for the batched repository ref probe.
+
+This module isolates GraphQL mechanics — query building, alias
+bookkeeping, response parsing, missing-repo classification, per-repo ref
+pagination, and the 5xx split-retry — the same way ``pagination.py``
+isolates REST ``Link``-header mechanics. ``GithubClient`` only wires an
+``HttpClient`` and the derived GraphQL endpoint into
+:func:`fetch_repo_refs`.
+
+Each chunk of repositories becomes one POST with aliases ``r0..rN`` that
+map back to input order. Repositories GitHub reports as ``NOT_FOUND`` or
+``FORBIDDEN`` arrive as a ``null`` data node plus an ``errors`` entry
+with ``path: ["rX"]``; those are collected, not raised. Any other
+GraphQL error raises :class:`untaped.UntapedError`.
+
+GraphQL cost: roughly one point per repo per ref connection, against a
+separate 5000 points/hour budget. A full heads+tags probe of 1500 repos
+costs ~3000 points; ``kinds=("heads",)`` halves that by omitting the
+tags connection from the query entirely.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from itertools import batched
+from typing import Any, NamedTuple, cast
+
+from untaped import HttpClient, HttpError, UntapedError
+
+from untaped_github.domain.models import BatchRepoRefsResult, RefKind, RepoRef, RepoRefs
+
+_REF_PREFIXES: dict[RefKind, str] = {"heads": "refs/heads/", "tags": "refs/tags/"}
+_PAGE_SIZE = 100
+_MISSING_ERROR_TYPES = frozenset({"NOT_FOUND", "FORBIDDEN"})
+_RATE_LIMIT_FIELD = "rateLimit { cost remaining resetAt }"
+# Annotated tags point at a Tag object instead of a commit; peel via
+# nested ``target { oid }`` two levels deep (covers tags-of-tags).
+_TARGET_FIELD = "target { oid ... on Tag { target { oid ... on Tag { target { oid } } } } }"
+
+
+class _RepoTarget(NamedTuple):
+    full_name: str
+    owner: str
+    name: str
+
+
+def graphql_endpoint(base_url: str) -> str:
+    """Derive the absolute GraphQL endpoint from a REST ``base_url``.
+
+    ``https://api.github.com`` → ``https://api.github.com/graphql``;
+    GHE ``https://<host>/api/v3`` → ``https://<host>/api/graphql``. The
+    URL must be absolute: the underlying httpx client carries the REST
+    ``base_url``, and relative joining would yield ``/api/v3/graphql``
+    on GHE.
+    """
+    base = base_url.rstrip("/")
+    if base.endswith("/api/v3"):
+        return base.removesuffix("/v3") + "/graphql"
+    return base + "/graphql"
+
+
+def fetch_repo_refs(
+    http: HttpClient,
+    endpoint: str,
+    repos: Sequence[str],
+    *,
+    kinds: Sequence[str] = ("heads", "tags"),
+    chunk_size: int = 50,
+) -> BatchRepoRefsResult:
+    """Probe refs for ``repos`` in batches of ``chunk_size`` per POST."""
+    ref_kinds = _validate_kinds(kinds)
+    if chunk_size < 1:
+        raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    targets = [_parse_repo_target(repo) for repo in repos]
+    collected: list[RepoRefs] = []
+    missing: list[str] = []
+    remaining: int | None = None
+    for chunk in batched(targets, chunk_size, strict=False):
+        for subchunk, payload in _execute_chunk(http, endpoint, chunk, ref_kinds):
+            found, gone, chunk_remaining = _parse_chunk(
+                http, endpoint, subchunk, ref_kinds, payload
+            )
+            collected.extend(found)
+            missing.extend(gone)
+            if chunk_remaining is not None:
+                remaining = chunk_remaining
+    return BatchRepoRefsResult(
+        repos=tuple(collected), missing=tuple(missing), rate_limit_remaining=remaining
+    )
+
+
+def _validate_kinds(kinds: Sequence[str]) -> tuple[RefKind, ...]:
+    if not kinds:
+        raise ValueError("kinds must not be empty")
+    for kind in kinds:
+        if kind not in _REF_PREFIXES:
+            raise ValueError(f"invalid ref kind {kind!r}: expected 'heads' or 'tags'")
+    # Membership in _REF_PREFIXES is exactly the RefKind literal set.
+    return tuple(cast("RefKind", kind) for kind in kinds)
+
+
+def _parse_repo_target(value: str) -> _RepoTarget:
+    owner, sep, name = value.partition("/")
+    if not sep or not owner or not name or "/" in name:
+        raise ValueError(f"invalid repository {value!r}: expected 'owner/name'")
+    return _RepoTarget(value, owner, name)
+
+
+def _execute_chunk(
+    http: HttpClient,
+    endpoint: str,
+    chunk: tuple[_RepoTarget, ...],
+    kinds: tuple[RefKind, ...],
+) -> list[tuple[tuple[_RepoTarget, ...], dict[str, Any]]]:
+    """POST one chunk; on a 5xx, retry once with the chunk split in half.
+
+    GitHub intermittently 502s on large aliased queries. If a half still
+    5xxs (or the chunk cannot be split), the :class:`HttpError`
+    propagates.
+    """
+    try:
+        return [(chunk, _post(http, endpoint, _build_batch_query(chunk, kinds)))]
+    except HttpError as exc:
+        if not _is_server_error(exc) or len(chunk) < 2:
+            raise
+    mid = len(chunk) // 2
+    return [
+        (half, _post(http, endpoint, _build_batch_query(half, kinds)))
+        for half in (chunk[:mid], chunk[mid:])
+    ]
+
+
+def _is_server_error(exc: HttpError) -> bool:
+    return exc.status_code is not None and exc.status_code >= 500
+
+
+def _post(http: HttpClient, endpoint: str, query: str) -> dict[str, Any]:
+    payload = http.post_json(endpoint, json={"query": query})
+    if not isinstance(payload, dict):
+        raise HttpError(
+            f"expected JSON object from {endpoint}, got {type(payload).__name__}",
+            url=endpoint,
+        )
+    return payload
+
+
+def _build_batch_query(chunk: tuple[_RepoTarget, ...], kinds: tuple[RefKind, ...]) -> str:
+    fields = " ".join(
+        _repository_field(f"r{index}", target, kinds) for index, target in enumerate(chunk)
+    )
+    return f"{{ {fields} {_RATE_LIMIT_FIELD} }}"
+
+
+def _repository_field(alias: str, target: _RepoTarget, kinds: tuple[RefKind, ...]) -> str:
+    refs = " ".join(_refs_field(kind) for kind in kinds)
+    return (
+        f"{alias}: repository(owner: {json.dumps(target.owner)}, "
+        f"name: {json.dumps(target.name)}) "
+        f"{{ nameWithOwner defaultBranchRef {{ name }} {refs} }}"
+    )
+
+
+def _build_page_query(target: _RepoTarget, kind: RefKind, cursor: str) -> str:
+    return (
+        f"{{ r0: repository(owner: {json.dumps(target.owner)}, "
+        f"name: {json.dumps(target.name)}) "
+        f"{{ {_refs_field(kind, after=cursor)} }} {_RATE_LIMIT_FIELD} }}"
+    )
+
+
+def _refs_field(kind: RefKind, *, after: str | None = None) -> str:
+    cursor = f", after: {json.dumps(after)}" if after is not None else ""
+    return (
+        f"{kind}: refs(refPrefix: {json.dumps(_REF_PREFIXES[kind])}, "
+        f"first: {_PAGE_SIZE}{cursor}) "
+        f"{{ pageInfo {{ hasNextPage endCursor }} nodes {{ name {_TARGET_FIELD} }} }}"
+    )
+
+
+def _parse_chunk(
+    http: HttpClient,
+    endpoint: str,
+    chunk: tuple[_RepoTarget, ...],
+    kinds: tuple[RefKind, ...],
+    payload: dict[str, Any],
+) -> tuple[list[RepoRefs], list[str], int | None]:
+    missing_aliases = _classify_errors(payload)
+    data = payload.get("data") or {}
+    found: list[RepoRefs] = []
+    missing: list[str] = []
+    remaining = _rate_limit_remaining(payload)
+    for index, target in enumerate(chunk):
+        alias = f"r{index}"
+        node = data.get(alias)
+        if node is None:
+            if alias not in missing_aliases:
+                raise UntapedError(
+                    f"github graphql returned null for {target.full_name} "
+                    "without an explanatory error"
+                )
+            missing.append(target.full_name)
+            continue
+        repo_refs, page_remaining = _collect_repo(http, endpoint, target, node, kinds)
+        if page_remaining is not None:
+            remaining = page_remaining
+        found.append(repo_refs)
+    return found, missing, remaining
+
+
+def _classify_errors(payload: dict[str, Any]) -> set[str]:
+    """Return aliases of missing repos; raise on any other GraphQL error."""
+    missing: set[str] = set()
+    for error in payload.get("errors") or ():
+        path = error.get("path") or []
+        if error.get("type") in _MISSING_ERROR_TYPES and path:
+            missing.add(str(path[0]))
+        else:
+            raise UntapedError(f"github graphql error: {error.get('message', error)}")
+    return missing
+
+
+def _collect_repo(
+    http: HttpClient,
+    endpoint: str,
+    target: _RepoTarget,
+    node: dict[str, Any],
+    kinds: tuple[RefKind, ...],
+) -> tuple[RepoRefs, int | None]:
+    """Build one :class:`RepoRefs`, following ref-pagination cursors.
+
+    Repos with >100 refs in a namespace are rare; follow-up single-repo
+    queries run serially with ``after: <cursor>`` until exhausted.
+    """
+    remaining: int | None = None
+    refs: list[RepoRef] = []
+    for kind in kinds:
+        connection = node[kind]
+        while True:
+            refs.extend(_parse_ref_nodes(kind, connection["nodes"]))
+            page = connection["pageInfo"]
+            if not page["hasNextPage"]:
+                break
+            payload = _post(http, endpoint, _build_page_query(target, kind, page["endCursor"]))
+            # The repo resolved in the batch query, so even NOT_FOUND
+            # here (deleted mid-probe) is unexpected enough to raise.
+            if _classify_errors(payload):
+                raise UntapedError(
+                    f"github graphql lost access to {target.full_name} during ref pagination"
+                )
+            page_remaining = _rate_limit_remaining(payload)
+            if page_remaining is not None:
+                remaining = page_remaining
+            connection = payload["data"]["r0"][kind]
+    default_branch_ref = node.get("defaultBranchRef")
+    default_branch = default_branch_ref["name"] if isinstance(default_branch_ref, dict) else None
+    return (
+        RepoRefs(full_name=target.full_name, default_branch=default_branch, refs=tuple(refs)),
+        remaining,
+    )
+
+
+def _parse_ref_nodes(kind: RefKind, nodes: list[dict[str, Any]]) -> list[RepoRef]:
+    return [RepoRef(kind=kind, name=node["name"], sha=_peel_oid(node["target"])) for node in nodes]
+
+
+def _peel_oid(target: dict[str, Any]) -> str:
+    """Return the deepest oid: annotated tags nest the commit under ``target``."""
+    oid = target.get("oid", "")
+    inner = target.get("target")
+    while isinstance(inner, dict):
+        if inner.get("oid"):
+            oid = inner["oid"]
+        inner = inner.get("target")
+    return str(oid)
+
+
+def _rate_limit_remaining(payload: dict[str, Any]) -> int | None:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    rate_limit = data.get("rateLimit")
+    if not isinstance(rate_limit, dict):
+        return None
+    remaining = rate_limit.get("remaining")
+    return remaining if isinstance(remaining, int) else None

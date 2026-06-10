@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from types import TracebackType
 from typing import Any
 
 from untaped import ConfigError, HttpClient, HttpSettings
 from untaped.http import resolve_verify
 
+from untaped_github.domain.models import BatchRepoRefsResult
+from untaped_github.infrastructure.graphql import fetch_repo_refs, graphql_endpoint
 from untaped_github.infrastructure.pagination import paginate_list, paginate_search
 from untaped_github.settings import GithubSettings
 
@@ -33,6 +35,7 @@ class GithubClient:
             headers=headers,
             verify=resolve_verify(http or HttpSettings()),
         )
+        self._graphql_endpoint = graphql_endpoint(config.base_url)
 
     def me(self) -> dict[str, Any]:
         return self._http.get_json_dict("/user")
@@ -88,6 +91,28 @@ class GithubClient:
 
     def list_team_repos(self, org: str, team_slug: str) -> Iterator[dict[str, Any]]:
         return paginate_list(self._http, f"/orgs/{org}/teams/{team_slug}/repos")
+
+    def batch_repo_refs(
+        self,
+        repos: Sequence[str],
+        *,
+        kinds: Sequence[str] = ("heads", "tags"),
+        chunk_size: int = 50,
+    ) -> BatchRepoRefsResult:
+        """Probe branch/tag heads for many ``owner/name`` repos via GraphQL.
+
+        Batches ``chunk_size`` repos per aliased GraphQL POST, so ~1500
+        repos resolve in ~30 API calls. ``kinds`` selects the ref
+        namespaces; passing only ``("heads",)`` omits the tags
+        connection and halves the GraphQL point cost.
+        """
+        return fetch_repo_refs(
+            self._http,
+            self._graphql_endpoint,
+            repos,
+            kinds=kinds,
+            chunk_size=chunk_size,
+        )
 
     def close(self) -> None:
         self._http.close()

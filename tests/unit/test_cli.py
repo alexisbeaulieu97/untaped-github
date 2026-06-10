@@ -42,7 +42,13 @@ def _write_missing_theme_config(tmp_path: Path) -> Path:
 
 
 def test_root_package_public_surface_is_slim() -> None:
-    assert untaped_github.__all__ == ["GithubClient", "GithubSettings"]
+    assert untaped_github.__all__ == [
+        "BatchRepoRefsResult",
+        "GithubClient",
+        "GithubSettings",
+        "RepoRef",
+        "RepoRefs",
+    ]
     assert not hasattr(untaped_github, "app")
     assert "ScopedQueryBase" not in untaped_github.domain.__all__
 
