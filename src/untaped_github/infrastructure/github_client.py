@@ -6,8 +6,7 @@ from collections.abc import Iterator, Sequence
 from types import TracebackType
 from typing import Any
 
-from untaped import ConfigError, HttpClient, HttpSettings
-from untaped.http import resolve_verify
+from untaped.api import HttpSettings, connected_client
 
 from untaped_github.domain.models import BatchRepoRefsResult
 from untaped_github.infrastructure.graphql import fetch_repo_refs, graphql_endpoint
@@ -16,24 +15,24 @@ from untaped_github.settings import GithubSettings
 
 
 class GithubClient:
-    """Talks to ``api.github.com`` (or a GHE base) using the configured token."""
+    """Talks to ``api.github.com`` (or a GHE base) using the configured token.
+
+    Connection wiring (required-field validation, bearer auth, TLS, base-URL
+    normalization) is delegated to core's ``connected_client``; a missing or
+    blank token fail-fasts with the standard ``ConfigError``. ``base_url``
+    stays in ``required`` despite its non-empty default so an explicit blank
+    override still fails loudly.
+    """
 
     def __init__(self, config: GithubSettings, *, http: HttpSettings | None = None) -> None:
-        token = config.token.get_secret_value().strip() if config.token is not None else ""
-        if not token:
-            raise ConfigError(
-                "github.token is not configured (set it via "
-                "`untaped config set github.token <token>` or UNTAPED_GITHUB__TOKEN)"
-            )
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Authorization": f"Bearer {token}",
-        }
-        self._http = HttpClient(
-            base_url=config.base_url.rstrip("/"),
-            headers=headers,
-            verify=resolve_verify(http or HttpSettings()),
+        self._http = connected_client(
+            config,
+            section="github",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            http=http,
         )
         self._graphql_endpoint = graphql_endpoint(config.base_url)
 

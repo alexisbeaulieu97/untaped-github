@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 from pydantic import SecretStr
-from untaped import HttpError, UntapedError
+from untaped.api import HttpError, UntapedError
 
 from untaped_github import GithubClient, GithubSettings
 

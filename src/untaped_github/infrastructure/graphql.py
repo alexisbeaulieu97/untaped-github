@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from itertools import batched
 from typing import Any, NamedTuple, cast
 
-from untaped import HttpClient, HttpError, UntapedError
+from untaped.api import HttpClient, HttpError, UntapedError
 
 from untaped_github.domain.models import BatchRepoRefsResult, RefKind, RepoRef, RepoRefs
 

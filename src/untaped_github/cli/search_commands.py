@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from cyclopts import Parameter, validators
-from untaped import (
+from untaped.api import (
     ColumnsOption,
     ConfigError,
     FormatOption,
