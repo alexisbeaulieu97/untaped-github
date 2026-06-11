@@ -25,7 +25,8 @@ PYDANTIC_ROW_SOURCES: dict[type[BaseModel], str] = {
 }
 
 _NOT_ROW_SOURCES_BY_MODULE: dict[str, frozenset[str]] = {
-    "untaped_github.domain.models": frozenset(),
+    # batch_repo_refs models are client-API results, not CLI rows.
+    "untaped_github.domain.models": frozenset({"BatchRepoRefsResult", "RepoRef", "RepoRefs"}),
 }
 
 

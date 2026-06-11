@@ -1,29 +1,45 @@
-"""Untaped plugin registration for the GitHub domain."""
+"""Untaped plugin manifest for the GitHub domain.
+
+API v3: the plugin object declares ``id``, ``untaped_api_version = 3``, and
+returns its contributions as data from ``manifest()``. The CLI is mounted
+through a ``CliSpec`` import path so ``untaped --help`` never imports the
+GitHub command modules.
+"""
 
 from __future__ import annotations
 
 from importlib.resources import files
 from pathlib import Path
 
-from untaped.plugins import PluginRegistry, SkillSpec
+from untaped.api import CliSpec, PluginManifest, SkillSpec
 
-from untaped_github.cli import app
 from untaped_github.settings import GithubSettings
 
 
 class GithubPlugin:
-    id = "github"
-    untaped_api_version = 2
+    """Entry-point plugin object exposed through ``untaped.plugins``."""
 
-    def register(self, registry: PluginRegistry) -> None:
-        registry.add_profile_settings("github", GithubSettings)
-        registry.add_cli("github", app)
-        registry.add_skill(
-            SkillSpec(
-                name="untaped-github",
-                source=Path(str(files("untaped_github").joinpath("skills", "untaped-github"))),
-                description="Use the untaped GitHub plugin.",
-            )
+    id = "github"
+    untaped_api_version = 3
+
+    def manifest(self) -> PluginManifest:
+        """Declare the GitHub CLI, profile settings, and agent skill."""
+        return PluginManifest(
+            clis=(
+                CliSpec(
+                    name="github",
+                    import_path="untaped_github.cli:app",
+                    help="Inspect and search GitHub from the authenticated user's account.",
+                ),
+            ),
+            profile_settings={"github": GithubSettings},
+            skills=(
+                SkillSpec(
+                    name="untaped-github",
+                    source=Path(str(files("untaped_github").joinpath("skills", "untaped-github"))),
+                    description="Use the untaped GitHub plugin.",
+                ),
+            ),
         )
 
 

@@ -9,14 +9,19 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from untaped.settings import get_settings
+from untaped.settings import get_settings, register_profile_settings
 from untaped.testing import CliInvoker
 
 from untaped_github.cli import app
+from untaped_github.settings import GithubSettings
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Iterator[None]:
+    # Invoking the github app directly skips plugin registration, so mirror
+    # the manifest's profile-settings contribution (idempotent for the same
+    # model class) before each test.
+    register_profile_settings("github", GithubSettings)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

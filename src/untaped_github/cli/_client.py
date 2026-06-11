@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from untaped import get_config_section, get_core_settings, profile_override
+from untaped.api import plugin_context
 
 from untaped_github.settings import GithubSettings
 
@@ -21,18 +21,17 @@ if TYPE_CHECKING:
 
 @contextmanager
 def open_client(profile: str | None = None) -> Iterator[GithubClient]:
-    """Build a :class:`GithubClient` from the cached :class:`Settings`.
+    """Build a :class:`GithubClient` from a one-shot :class:`PluginContext`.
 
-    Deferred imports keep the workspace-wide rule about lazy imports on
-    CLI startup paths satisfied (the GitHub client's transitive imports
-    — httpx, pydantic models, etc. — would otherwise pay on every
-    ``untaped --help``).
+    ``plugin_context(profile)`` resolves settings exactly once (honoring the
+    ``--profile`` override) and hands back a frozen context; nothing leaks
+    into ambient process state. Deferred imports keep the workspace-wide rule
+    about lazy imports on CLI startup paths satisfied (the GitHub client's
+    transitive imports — httpx, pydantic models, etc. — would otherwise pay
+    on every ``untaped --help``).
     """
     from untaped_github.infrastructure import GithubClient  # noqa: PLC0415
 
-    with profile_override(profile):
-        settings = get_core_settings()
-        with GithubClient(
-            get_config_section("github", GithubSettings), http=settings.http
-        ) as client:
-            yield client
+    ctx = plugin_context(profile)
+    with GithubClient(ctx.section("github", GithubSettings), http=ctx.http) as client:
+        yield client

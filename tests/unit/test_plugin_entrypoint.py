@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tomllib
 from collections.abc import Iterator
 from importlib.metadata import entry_points
@@ -11,13 +13,12 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from untaped import get_settings
 from untaped.main import build_app
-from untaped.plugins import PluginRegistry
-from untaped.settings import reset_config_registry_for_tests
+from untaped.settings import get_settings, reset_config_registry_for_tests
 from untaped.testing import CliInvoker
 
 from untaped_github.plugin import plugin as github_plugin
+from untaped_github.settings import GithubSettings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,6 +36,19 @@ def _isolate_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     get_settings.cache_clear()
 
 
+def test_loading_plugin_does_not_import_cli_module() -> None:
+    # The whole point of CliSpec(import_path=...) is that `untaped --help`
+    # never pays for the GitHub CLI's import chain. A fresh interpreter is
+    # the only reliable way to observe import side effects.
+    code = (
+        "import sys; import untaped_github.plugin; "
+        "assert 'untaped_github.cli' not in sys.modules, 'cli imported eagerly'; "
+        "from untaped_github import app; from cyclopts import App; "
+        "assert isinstance(app, App)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
 def test_github_plugin_entry_point_is_declared() -> None:
     matches = [
         ep
@@ -46,7 +60,24 @@ def test_github_plugin_entry_point_is_declared() -> None:
 
 
 def test_github_plugin_declares_untaped_api_version() -> None:
-    assert github_plugin.untaped_api_version == 2
+    assert github_plugin.untaped_api_version == 3
+
+
+def test_manifest_mounts_github_cli_lazily() -> None:
+    manifest = github_plugin.manifest()
+
+    (cli,) = manifest.clis
+    assert cli.name == "github"
+    assert cli.import_path == "untaped_github.cli:app"
+    assert cli.app is None
+    assert "GitHub" in cli.help
+
+
+def test_manifest_contributes_github_profile_settings() -> None:
+    manifest = github_plugin.manifest()
+
+    assert dict(manifest.profile_settings) == {"github": GithubSettings}
+    assert dict(manifest.state_settings) == {}
 
 
 def test_untaped_source_tracks_core_default_branch() -> None:
@@ -65,12 +96,11 @@ def test_root_app_can_register_github_plugin() -> None:
     assert "Inspect and search GitHub" in result.output
 
 
-def test_github_plugin_registers_agent_skill() -> None:
-    registry = PluginRegistry()
+def test_manifest_contributes_agent_skill() -> None:
+    manifest = github_plugin.manifest()
 
-    github_plugin.register(registry)
-
-    spec = registry.skills["untaped-github"]
+    (spec,) = manifest.skills
+    assert spec.name == "untaped-github"
     assert spec.description == "Use the untaped GitHub plugin."
     assert spec.source.joinpath("SKILL.md").is_file()
 

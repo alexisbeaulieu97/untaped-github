@@ -92,9 +92,15 @@ def test_infrastructure_does_not_read_global_settings() -> None:
         rel = py_file.relative_to(SRC_DIR)
         tree = ast.parse(py_file.read_text(encoding="utf-8"))
         for imp in _runtime_imports(tree):
-            if isinstance(imp, ast.ImportFrom) and imp.module in {"untaped", "untaped.settings"}:
+            if isinstance(imp, ast.ImportFrom) and imp.module in {
+                "untaped",
+                "untaped.api",
+                "untaped.settings",
+            }:
                 bad = sorted(
-                    alias.name for alias in imp.names if alias.name in {"Settings", "get_settings"}
+                    alias.name
+                    for alias in imp.names
+                    if alias.name in {"Settings", "get_settings", "get_core_settings"}
                 )
                 if bad:
                     violations.append(f"{rel}:{imp.lineno} imports {', '.join(bad)}")

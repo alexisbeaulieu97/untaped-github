@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+RefKind = Literal["heads", "tags"]
+"""Ref namespace probed by ``GithubClient.batch_repo_refs``."""
 
 
 class GithubUser(BaseModel):
@@ -122,3 +125,44 @@ class UserResult(BaseModel):
     login: str
     type: str
     html_url: str
+
+
+class RepoRef(BaseModel):
+    """One branch or tag head from the GraphQL batched ref probe.
+
+    ``sha`` is always the peeled commit oid: annotated tags (including
+    tags-of-tags) are resolved to the commit they ultimately point at.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: RefKind
+    name: str
+    sha: str
+
+
+class RepoRefs(BaseModel):
+    """All probed refs for one repository, in query ``kinds`` order."""
+
+    model_config = ConfigDict(frozen=True)
+
+    full_name: str
+    default_branch: str | None = None
+    refs: tuple[RepoRef, ...] = ()
+
+
+class BatchRepoRefsResult(BaseModel):
+    """Outcome of ``GithubClient.batch_repo_refs``.
+
+    ``repos`` preserves input order, skipping entries listed in
+    ``missing`` (repositories GitHub reported as ``NOT_FOUND`` or
+    ``FORBIDDEN``). ``rate_limit_remaining`` surfaces the GraphQL
+    ``rateLimit.remaining`` points from the last response so callers can
+    warn when the hourly budget runs low.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    repos: tuple[RepoRefs, ...] = ()
+    missing: tuple[str, ...] = ()
+    rate_limit_remaining: int | None = None

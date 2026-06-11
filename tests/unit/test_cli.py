@@ -4,16 +4,21 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
-from untaped.settings import get_settings
+from untaped.settings import get_settings, register_profile_settings
 from untaped.testing import CliInvoker
 
 import untaped_github
 import untaped_github.domain
 from untaped_github.cli import app
+from untaped_github.settings import GithubSettings
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Iterator[None]:
+    # Invoking the github app directly skips plugin registration, so mirror
+    # the manifest's profile-settings contribution (idempotent for the same
+    # model class) before each test.
+    register_profile_settings("github", GithubSettings)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -42,9 +47,24 @@ def _write_missing_theme_config(tmp_path: Path) -> Path:
 
 
 def test_root_package_public_surface_is_slim() -> None:
-    assert untaped_github.__all__ == ["GithubClient", "GithubSettings"]
-    assert not hasattr(untaped_github, "app")
+    assert untaped_github.__all__ == [
+        "BatchRepoRefsResult",
+        "GithubClient",
+        "GithubSettings",
+        "RepoRef",
+        "RepoRefs",
+        "app",
+    ]
     assert "ScopedQueryBase" not in untaped_github.domain.__all__
+
+
+def test_app_attribute_resolves_to_cli_app() -> None:
+    assert untaped_github.app is app
+
+
+def test_unknown_root_attribute_raises_attribute_error() -> None:
+    with pytest.raises(AttributeError, match="nonsense"):
+        _ = untaped_github.nonsense
 
 
 def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

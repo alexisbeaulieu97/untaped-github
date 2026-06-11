@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from untaped import (
+from untaped.api import (
     ColumnsOption,
     FormatOption,
     ProfileOverrideOption,

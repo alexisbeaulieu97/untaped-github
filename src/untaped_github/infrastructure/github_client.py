@@ -2,37 +2,39 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from types import TracebackType
 from typing import Any
 
-from untaped import ConfigError, HttpClient, HttpSettings
-from untaped.http import resolve_verify
+from untaped.api import HttpSettings, connected_client
 
+from untaped_github.domain.models import BatchRepoRefsResult
+from untaped_github.infrastructure.graphql import fetch_repo_refs, graphql_endpoint
 from untaped_github.infrastructure.pagination import paginate_list, paginate_search
 from untaped_github.settings import GithubSettings
 
 
 class GithubClient:
-    """Talks to ``api.github.com`` (or a GHE base) using the configured token."""
+    """Talks to ``api.github.com`` (or a GHE base) using the configured token.
+
+    Connection wiring (required-field validation, bearer auth, TLS, base-URL
+    normalization) is delegated to core's ``connected_client``; a missing or
+    blank token fail-fasts with the standard ``ConfigError``. ``base_url``
+    stays in ``required`` despite its non-empty default so an explicit blank
+    override still fails loudly.
+    """
 
     def __init__(self, config: GithubSettings, *, http: HttpSettings | None = None) -> None:
-        token = config.token.get_secret_value().strip() if config.token is not None else ""
-        if not token:
-            raise ConfigError(
-                "github.token is not configured (set it via "
-                "`untaped config set github.token <token>` or UNTAPED_GITHUB__TOKEN)"
-            )
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Authorization": f"Bearer {token}",
-        }
-        self._http = HttpClient(
-            base_url=config.base_url.rstrip("/"),
-            headers=headers,
-            verify=resolve_verify(http or HttpSettings()),
+        self._http = connected_client(
+            config,
+            section="github",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            http=http,
         )
+        self._graphql_endpoint = graphql_endpoint(config.base_url)
 
     def me(self) -> dict[str, Any]:
         return self._http.get_json_dict("/user")
@@ -88,6 +90,28 @@ class GithubClient:
 
     def list_team_repos(self, org: str, team_slug: str) -> Iterator[dict[str, Any]]:
         return paginate_list(self._http, f"/orgs/{org}/teams/{team_slug}/repos")
+
+    def batch_repo_refs(
+        self,
+        repos: Sequence[str],
+        *,
+        kinds: Sequence[str] = ("heads", "tags"),
+        chunk_size: int = 50,
+    ) -> BatchRepoRefsResult:
+        """Probe branch/tag heads for many ``owner/name`` repos via GraphQL.
+
+        Batches ``chunk_size`` repos per aliased GraphQL POST, so ~1500
+        repos resolve in ~30 API calls. ``kinds`` selects the ref
+        namespaces; passing only ``("heads",)`` omits the tags
+        connection and halves the GraphQL point cost.
+        """
+        return fetch_repo_refs(
+            self._http,
+            self._graphql_endpoint,
+            repos,
+            kinds=kinds,
+            chunk_size=chunk_size,
+        )
 
     def close(self) -> None:
         self._http.close()

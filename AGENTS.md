@@ -21,14 +21,23 @@ primitives, and shared errors.
 3. **Expose the plugin through the `untaped.plugins` entry point.**
    `github = "untaped_github.plugin:plugin"` is the public integration point.
    The plugin object must expose `id = "github"`, literal
-   `untaped_api_version = 2`, and `register(registry)`.
+   `untaped_api_version = 3`, and `manifest()` returning a `PluginManifest`.
+   The manifest mounts the CLI lazily via
+   `CliSpec(name="github", import_path="untaped_github.cli:app", help=...)`
+   — `plugin.py` must never import the CLI app, and
+   `untaped_github/__init__.py` re-exports `app` only through a PEP 562
+   module `__getattr__` so `untaped --help` never imports the command tree.
 4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
    `infrastructure -> domain`; `application` and `infrastructure` must not
    import each other at runtime.
 5. **Declare ports in `application/ports.py`.** Use cases depend on the
    narrowest `Protocol`; concrete adapters satisfy ports structurally.
-6. **Use absolute imports.** `from untaped_github...` and `from untaped...`,
-   never relative imports.
+6. **Use absolute imports, and import the SDK from `untaped.api`.**
+   `from untaped_github...` and `from untaped.api import ...`, never
+   relative imports. `untaped.api` is the supported plugin SDK surface;
+   only tests may reach for `untaped.testing` (and core internals such as
+   `untaped.main`/`untaped.settings` when a name is not exported by
+   `untaped.api`).
 7. **Every source module has a module docstring.** Re-export `__init__.py`
    files are exempt.
 8. **Cyclopts command signatures are explicit.** Use
@@ -53,8 +62,9 @@ primitives, and shared errors.
     invalid or missing themes never break pipe-friendly output.
 13. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
     `.get_secret_value()` only inside the HTTP adapter.
-14. **Use `resolve_verify(http)` for GitHub HTTP clients.** Never hard-code
-    TLS verification policy.
+14. **Build GitHub HTTP clients with `connected_client(...)`.** Core owns
+    required-field validation, bearer auth, base-URL normalization, and TLS
+    resolution (`resolve_verify`); never hard-code TLS verification policy.
 15. **Finish with verification.** Run `uv run ruff check --fix`,
     `uv run ruff format`, `uv run mypy`, and `uv run pytest`.
 
@@ -62,37 +72,40 @@ primitives, and shared errors.
 
 ```text
 src/untaped_github/
-├── __init__.py           # small root API: GithubClient, GithubSettings
-├── plugin.py             # entry-point plugin object
+├── __init__.py           # small root API: GithubClient, GithubSettings, lazy app
+├── plugin.py             # entry-point plugin object (v3 manifest)
 ├── settings.py           # plugin-owned config model
 ├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
 ├── domain/               # pure models and query value objects
-└── infrastructure/       # GitHub REST client and pagination
+└── infrastructure/       # GitHub REST/GraphQL client, pagination, graphql
 ```
 
-The plugin object registers `GithubSettings` as the `github` profile
-settings section, mounts the Cyclopts app as the root `github` command, and
-registers the packaged `untaped-github` agent skill. Plugin code reads typed
-settings with
-`get_config_section("github", GithubSettings)`, not a global aggregate
-`settings.github` attribute.
+The plugin object's `manifest()` declares `GithubSettings` as the `github`
+profile settings section, mounts the Cyclopts app as the root `github`
+command through a lazy `CliSpec` import path, and contributes the packaged
+`untaped-github` agent skill. Plugin code reads typed settings with
+`plugin_context(profile).section("github", GithubSettings)`, not a global
+aggregate `settings.github` attribute.
 
 ## Auth Model
 
 GitHub uses bearer-token auth. The token is a `SecretStr` read through
-`get_config_section("github", GithubSettings)` or `UNTAPED_GITHUB__TOKEN`.
-The CLI composition root reads it once and passes the narrowed
-`GithubSettings` into `GithubClient`. Adapters never read the full core
-settings aggregate directly.
+`plugin_context(profile).section("github", GithubSettings)` or
+`UNTAPED_GITHUB__TOKEN`. The CLI composition root reads it once and passes
+the narrowed `GithubSettings` into `GithubClient`. Adapters never read the
+full core settings aggregate directly.
 
 Commands that read settings expose the core command-local
 `ProfileOverrideOption` as `--profile` and pass it into
-`open_client(profile)`. `open_client` applies `profile_override(profile)`
-around both core HTTP settings and the `github` profile section lookup.
+`open_client(profile)`. `open_client` calls `plugin_context(profile)`,
+which resolves settings exactly once under the override and returns a
+frozen context (`ctx.section(...)` for the `github` section, `ctx.http`
+for core HTTP settings) without leaking into ambient process state.
 
-`GithubClient.__init__` fail-fasts with `ConfigError` if the token is
-missing or whitespace-only. There is no anonymous-mode fallback;
+`GithubClient.__init__` fail-fasts with `ConfigError` (via core's
+`connected_client` required-field validation) if the token is missing or
+whitespace-only. There is no anonymous-mode fallback;
 unauthenticated GitHub is rate-limited enough that supporting it inline
 would produce misleading behavior.
 
@@ -113,22 +126,67 @@ or call site that consumes it.
 
 ## HTTP Wiring
 
-`GithubClient` wraps `untaped.HttpClient` with these headers:
+`GithubClient` builds its `HttpClient` through core's
+`connected_client(config, section="github", headers=..., http=...)`, which
+validates `base_url` and `token`, strips/normalizes them, and sets:
 
 - `Accept: application/vnd.github+json`
 - `X-GitHub-Api-Version: 2022-11-28`
-- `Authorization: Bearer <token>`
+- `Authorization: Bearer <token>` (added by `connected_client`)
 
-TLS comes from `resolve_verify(http)` using core `HttpSettings`.
+TLS comes from `resolve_verify(http)` inside `connected_client`, using
+core `HttpSettings`.
 
 ## Public Client API
 
 `untaped_github` intentionally re-exports `GithubClient` and
-`GithubSettings` for sibling plugins that need GitHub access. Keep this
-surface small and tested. Cross-plugin consumers may use repository
-metadata, org/team repository listing, matching refs, tree reads, and raw
-content reads. Add missing GitHub operations here rather than duplicating a
-GitHub client in another plugin or importing private CLI helpers.
+`GithubSettings` for sibling plugins that need GitHub access, plus the
+`batch_repo_refs` result models (`BatchRepoRefsResult`, `RepoRefs`,
+`RepoRef`). Keep this surface small and tested. Cross-plugin consumers
+may use repository metadata, org/team repository listing, matching refs,
+batched ref probing, tree reads, and raw content reads. Add missing
+GitHub operations here rather than duplicating a GitHub client in
+another plugin or importing private CLI helpers.
+
+## GraphQL Batched Ref Probe
+
+`GithubClient.batch_repo_refs(repos, *, kinds=("heads", "tags"),
+chunk_size=50)` probes branch/tag heads for many `owner/name` repos in
+few API calls (~1500 repos in ~30 POSTs at the default chunk size). It
+is the freshness probe consumed by sibling plugins instead of per-repo
+`git ls-remote`.
+
+Mechanics live in `infrastructure/graphql.py`, isolated the same way
+`pagination.py` isolates Link-header mechanics; `github_client.py` only
+wires `self._http.post_json(...)` at the derived endpoint. Load-bearing
+behaviors:
+
+- **Endpoint derivation is absolute.** `https://api.github.com` →
+  `https://api.github.com/graphql`; GHE `https://<host>/api/v3` →
+  `https://<host>/api/graphql`. The httpx client carries the REST
+  `base_url`, so a relative path would join to `/api/v3/graphql` on GHE.
+- **Aliases `r0..rN` map back to input order** within each chunk; each
+  chunk is one POST built from escaped GraphQL literals (`json.dumps`).
+- **Annotated tags are peeled.** The query selects nested
+  `target { oid }` two levels deep (covers tags-of-tags); `RepoRef.sha`
+  is always the commit oid, falling back to the outermost oid present.
+- **`kinds=("heads",)` omits the tags connection entirely**, halving the
+  per-repo point cost.
+- **Missing repos don't raise.** A `null` data node plus a `NOT_FOUND`
+  or `FORBIDDEN` error with `path: ["rX"]` lands the input full name in
+  `BatchRepoRefsResult.missing`; any other GraphQL error raises
+  `UntapedError`.
+- **Ref-pagination overflow** (>100 refs in a namespace) is followed
+  serially with single-repo `after: <cursor>` queries until exhausted.
+- **5xx split-retry.** GitHub intermittently 502s on large aliased
+  queries; the chunk is retried once split in half, and a half that
+  still 5xxs raises `HttpError`.
+
+GraphQL has its own 5000 points/hour budget (separate from REST), at
+roughly one point per repo per ref connection. A full heads+tags probe
+of 1500 repos costs ≈ 3000 points — callers should watch
+`BatchRepoRefsResult.rate_limit_remaining` (GraphQL
+`rateLimit.remaining`) and warn when the budget runs low.
 
 ## Rate Limiting
 
@@ -142,6 +200,9 @@ accept larger values, but the paginator stops once GitHub stops returning a
 
 Future high-volume features should honor `X-RateLimit-Remaining` and
 `X-RateLimit-Reset`, and back off on `429 Too Many Requests`.
+
+GraphQL (`batch_repo_refs`) draws on a separate 5000 points/hour budget;
+see "GraphQL Batched Ref Probe" below for cost math.
 
 ## Search
 
@@ -210,11 +271,16 @@ application use cases should receive already-parsed `repos` and
 until exhausted or `--limit` is hit. Search payloads nest rows under `items`;
 list payloads, such as team repos, return JSON arrays.
 
+`pagination.py` keeps only the GitHub knowledge — `Link`-header parsing and
+the payload shapes — as a fetch closure handed to core's `paginate_pages`,
+which owns the loop, the limit, the cursor-cycle guard, and the
+100-page non-convergence cap (`UntapedError`).
+
 Two efficiency/defense rules are load-bearing:
 
 - When `--limit < per_page`, the first request asks only for `limit` rows.
-- The paginator visits at most `_MAX_PAGES` URLs and refuses to follow a
-  `next` link that matches the current or any previously visited URL.
+- `paginate_pages` caps the walk at 100 pages and refuses to follow a
+  `next` link that matches any previously followed URL.
 
 ## Layering
 
@@ -224,8 +290,11 @@ Two efficiency/defense rules are load-bearing:
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
   `SearchUsers`, and their `Protocol` ports. Scope defaulting and
   team-to-repo resolution live here.
-- `infrastructure/`: `GithubClient` and `pagination.py`. Adapters satisfy
-  application ports structurally and do not import `application`.
+- `infrastructure/`: `GithubClient` (wired via core `connected_client`),
+  `pagination.py` (REST Link-header mechanics over core `paginate_pages`),
+  and `graphql.py` (batched ref-probe query building and response
+  parsing). Adapters satisfy application ports structurally and do not
+  import `application`.
 - `cli/`: composition root. `cli/_client.open_client` reads the plugin config
   and returns a context-managed `GithubClient`; top-level commands use it.
 
@@ -251,7 +320,8 @@ coverage gate.
    service behavior.
 3. Add a domain model or query value object in `domain/` when needed.
 4. Add the HTTP method to `infrastructure/github_client.py` and keep
-   pagination details in `infrastructure/pagination.py`.
+   pagination details in `infrastructure/pagination.py` (REST) or query
+   building/response parsing in `infrastructure/graphql.py` (GraphQL).
 5. Wire the Cyclopts command in `cli/commands.py` or `cli/search_commands.py`;
    keep stdout data-only and expose `--format`/`--columns` for data output.
 6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.
