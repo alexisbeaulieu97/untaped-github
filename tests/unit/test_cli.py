@@ -112,33 +112,22 @@ def test_whoami_raw_ignores_invalid_ui_theme(
     assert "unknown UI theme" not in result.output
 
 
-def test_whoami_profile_flag_reads_named_profile(
+def test_whoami_rejects_command_local_profile_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cfg = tmp_path / "config.yml"
-    cfg.write_text(
-        "profiles:\n"
-        "  default:\n"
-        "    github:\n"
-        "      token: default-token\n"
-        "      base_url: https://wrong.example.com\n"
-        "  stage:\n"
-        "    github:\n"
-        "      token: stage-token\n"
-        "      base_url: https://api.github.com\n"
-        "active: default\n"
+    # Profile selection moved to the root `untaped --profile` option
+    # (plugin API v4, accepted in any token position). The plugin's own
+    # commands no longer define a local --profile, so it must be rejected
+    # as an unknown option (usage error, exit 2).
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(
+        app, ["whoami", "--profile", "stage", "--format", "raw", "--columns", "login"]
     )
-    monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
 
-    with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
-        mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
-        result = CliInvoker().invoke(
-            app, ["whoami", "--profile", "stage", "--format", "raw", "--columns", "login"]
-        )
-
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "octocat"
+    assert result.exit_code == 2, result.output
+    assert "--profile" in result.output
 
 
 def test_whoami_requires_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

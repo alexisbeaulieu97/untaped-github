@@ -85,23 +85,24 @@ The plugin object's `manifest()` declares `GithubSettings` as the `github`
 profile settings section, mounts the Cyclopts app as the root `github`
 command through a lazy `CliSpec` import path, and contributes the packaged
 `untaped-github` agent skill. Plugin code reads typed settings with
-`plugin_context(profile).section("github", GithubSettings)`, not a global
+`plugin_context().section("github", GithubSettings)`, not a global
 aggregate `settings.github` attribute.
 
 ## Auth Model
 
 GitHub uses bearer-token auth. The token is a `SecretStr` read through
-`plugin_context(profile).section("github", GithubSettings)` or
+`plugin_context().section("github", GithubSettings)` or
 `UNTAPED_GITHUB__TOKEN`. The CLI composition root reads it once and passes
 the narrowed `GithubSettings` into `GithubClient`. Adapters never read the
 full core settings aggregate directly.
 
-Commands that read settings expose the core command-local
-`ProfileOverrideOption` as `--profile` and pass it into
-`open_client(profile)`. `open_client` calls `plugin_context(profile)`,
-which resolves settings exactly once under the override and returns a
-frozen context (`ctx.section(...)` for the `github` section, `ctx.http`
-for core HTTP settings) without leaking into ambient process state.
+Profile selection is owned by core: the root `untaped --profile` option
+(plugin API v4) works in any token position, so plugin commands define no
+command-local `--profile` parameter. Commands call bare `open_client()`,
+which calls `plugin_context()`; core resolves settings exactly once under
+the active profile and returns a frozen context (`ctx.section(...)` for
+the `github` section, `ctx.http` for core HTTP settings) without leaking
+into ambient process state.
 
 `GithubClient.__init__` fail-fasts with `ConfigError` (via core's
 `connected_client` required-field validation) if the token is missing or

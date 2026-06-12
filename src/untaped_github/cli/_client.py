@@ -20,18 +20,18 @@ if TYPE_CHECKING:
 
 
 @contextmanager
-def open_client(profile: str | None = None) -> Iterator[GithubClient]:
+def open_client() -> Iterator[GithubClient]:
     """Build a :class:`GithubClient` from a one-shot :class:`PluginContext`.
 
-    ``plugin_context(profile)`` resolves settings exactly once (honoring the
-    ``--profile`` override) and hands back a frozen context; nothing leaks
-    into ambient process state. Deferred imports keep the workspace-wide rule
-    about lazy imports on CLI startup paths satisfied (the GitHub client's
-    transitive imports — httpx, pydantic models, etc. — would otherwise pay
-    on every ``untaped --help``).
+    ``plugin_context()`` resolves settings exactly once (honoring the root
+    ``--profile`` selector applied by core) and hands back a frozen context;
+    nothing leaks into ambient process state. Deferred imports keep the
+    workspace-wide rule about lazy imports on CLI startup paths satisfied
+    (the GitHub client's transitive imports — httpx, pydantic models, etc. —
+    would otherwise pay on every ``untaped --help``).
     """
     from untaped_github.infrastructure import GithubClient  # noqa: PLC0415
 
-    ctx = plugin_context(profile)
+    ctx = plugin_context()
     with GithubClient(ctx.section("github", GithubSettings), http=ctx.http) as client:
         yield client

@@ -149,58 +149,23 @@ def test_search_repos_raw_ignores_invalid_ui_theme(
     assert "unknown UI theme" not in result.output
 
 
-def test_search_repos_profile_flag_reads_named_profile(
+def test_search_repos_rejects_command_local_profile_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cfg = tmp_path / "config.yml"
-    cfg.write_text(
-        "profiles:\n"
-        "  default:\n"
-        "    github:\n"
-        "      token: default-token\n"
-        "      base_url: https://wrong.example.com\n"
-        "  stage:\n"
-        "    github:\n"
-        "      token: stage-token\n"
-        "      base_url: https://api.github.com\n"
-        "active: default\n"
+    # Profile selection moved to the root `untaped --profile` option
+    # (plugin API v4, accepted in any token position). The plugin's own
+    # commands no longer define a local --profile, so it must be rejected
+    # as an unknown option (usage error, exit 2).
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(
+        app,
+        ["search", "repos", "--profile", "stage", "--format", "json"],
     )
-    monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
 
-    payload = {
-        "total_count": 1,
-        "incomplete_results": False,
-        "items": [
-            {
-                "id": 1,
-                "name": "alpha",
-                "full_name": "octocat/alpha",
-                "html_url": "https://github.com/octocat/alpha",
-                "stargazers_count": 7,
-            }
-        ],
-    }
-    with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
-        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
-        result = CliInvoker().invoke(
-            app,
-            [
-                "search",
-                "repos",
-                "--profile",
-                "stage",
-                "--language",
-                "python",
-                "--format",
-                "raw",
-                "--columns",
-                "full_name",
-            ],
-        )
-
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "octocat/alpha"
+    assert result.exit_code == 2, result.output
+    assert "--profile" in result.output
 
 
 def test_search_repos_with_explicit_org_does_not_inject_at_me(
