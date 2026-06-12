@@ -237,6 +237,131 @@ def test_batch_repo_refs_collects_not_found_repos_into_missing() -> None:
     assert result.missing == ("acme/gone",)
 
 
+def test_batch_repo_refs_skips_refs_with_null_target() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json=_payload(
+                    {
+                        "r0": _repo_node(
+                            "acme/site",
+                            heads=_connection(
+                                [
+                                    _ref_node("main", {"oid": "c1"}),
+                                    # GitHub's schema allows Ref.target to be
+                                    # null; such a ref has no resolvable object.
+                                    {"name": "broken", "target": None},
+                                    _ref_node("dev", {"oid": "c2"}),
+                                ]
+                            ),
+                        )
+                    }
+                ),
+            )
+        )
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/site"], kinds=("heads",))
+
+    (site,) = result.repos
+    assert [(ref.name, ref.sha) for ref in site.refs] == [("main", "c1"), ("dev", "c2")]
+
+
+def test_batch_repo_refs_dedupes_repeated_kinds() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json=_payload(
+                    {
+                        "r0": _repo_node(
+                            "acme/site",
+                            heads=_connection([_ref_node("main", {"oid": "c1"})]),
+                        )
+                    }
+                ),
+            )
+        )
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/site"], kinds=("heads", "heads"))
+
+    # The duplicate kind is dropped: one connection in the query, and the
+    # refs are not collected twice.
+    assert _query(route).count("refs/heads/") == 1
+    (site,) = result.repos
+    assert [(ref.name, ref.sha) for ref in site.refs] == [("main", "c1")]
+
+
+def test_batch_repo_refs_collects_forbidden_repos_into_missing() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json=_payload(
+                    {
+                        "r0": _repo_node("acme/site", heads=_connection([]), tags=_connection([])),
+                        "r1": None,
+                    },
+                    errors=[
+                        {
+                            "type": "FORBIDDEN",
+                            "path": ["r1"],
+                            "message": "Resource not accessible",
+                        }
+                    ],
+                ),
+            )
+        )
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/site", "acme/private"])
+
+    assert [repo.full_name for repo in result.repos] == ["acme/site"]
+    assert result.missing == ("acme/private",)
+
+
+def test_batch_repo_refs_raises_when_repo_lost_during_ref_pagination() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {
+                            "r0": _repo_node(
+                                "acme/site",
+                                heads=_connection(
+                                    [_ref_node("main", {"oid": "c1"})],
+                                    has_next=True,
+                                    end_cursor="CUR",
+                                ),
+                            )
+                        }
+                    ),
+                ),
+                # The repo resolved in the batch query but vanishes
+                # (deleted mid-probe) before the pagination follow-up.
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {"r0": None},
+                        errors=[
+                            {
+                                "type": "NOT_FOUND",
+                                "path": ["r0"],
+                                "message": "Could not resolve to a Repository",
+                            }
+                        ],
+                    ),
+                ),
+            ]
+        )
+        with (
+            _client() as client,
+            pytest.raises(UntapedError, match="lost access to acme/site during ref pagination"),
+        ):
+            client.batch_repo_refs(["acme/site"], kinds=("heads",))
+
+
 def test_batch_repo_refs_raises_on_other_graphql_errors() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.post("/graphql").mock(
@@ -359,7 +484,10 @@ def test_batch_repo_refs_does_not_retry_4xx() -> None:
 
 @pytest.mark.parametrize("bad", ["site", "acme/", "/site", "acme/site/extra", ""])
 def test_batch_repo_refs_rejects_invalid_repo_strings(bad: str) -> None:
-    with _client() as client, pytest.raises(ValueError, match="owner/name"):
+    # UntapedError, not ValueError: repo strings can come from user
+    # source config, and core ``report_errors`` renders UntapedError
+    # cleanly instead of as a traceback.
+    with _client() as client, pytest.raises(UntapedError, match="owner/name"):
         client.batch_repo_refs([bad])
 
 

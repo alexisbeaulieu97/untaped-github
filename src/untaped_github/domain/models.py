@@ -130,8 +130,9 @@ class UserResult(BaseModel):
 class RepoRef(BaseModel):
     """One branch or tag head from the GraphQL batched ref probe.
 
-    ``sha`` is always the peeled commit oid: annotated tags (including
-    tags-of-tags) are resolved to the commit they ultimately point at.
+    ``sha`` is the peeled oid: annotated tags are peeled up to two
+    levels (covering tags-of-tags), so deeper tag chains return the
+    innermost fetched oid rather than the final commit.
     """
 
     model_config = ConfigDict(frozen=True)

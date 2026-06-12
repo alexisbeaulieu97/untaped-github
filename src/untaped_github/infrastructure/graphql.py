@@ -78,7 +78,7 @@ def fetch_repo_refs(
     remaining: int | None = None
     for chunk in batched(targets, chunk_size, strict=False):
         for subchunk, payload in _execute_chunk(http, endpoint, chunk, ref_kinds):
-            found, gone, chunk_remaining = _parse_chunk(
+            found, gone, chunk_remaining = _resolve_chunk(
                 http, endpoint, subchunk, ref_kinds, payload
             )
             collected.extend(found)
@@ -96,14 +96,19 @@ def _validate_kinds(kinds: Sequence[str]) -> tuple[RefKind, ...]:
     for kind in kinds:
         if kind not in _REF_PREFIXES:
             raise ValueError(f"invalid ref kind {kind!r}: expected 'heads' or 'tags'")
+    # Dedupe preserving order: GraphQL merges duplicate aliased
+    # connections, so a repeated kind would double every ref.
     # Membership in _REF_PREFIXES is exactly the RefKind literal set.
-    return tuple(cast("RefKind", kind) for kind in kinds)
+    return tuple(cast("RefKind", kind) for kind in dict.fromkeys(kinds))
 
 
 def _parse_repo_target(value: str) -> _RepoTarget:
+    # UntapedError, not ValueError: repo strings can originate from user
+    # source config (typos), and core ``report_errors`` renders
+    # UntapedError as a message instead of a traceback.
     owner, sep, name = value.partition("/")
     if not sep or not owner or not name or "/" in name:
-        raise ValueError(f"invalid repository {value!r}: expected 'owner/name'")
+        raise UntapedError(f"invalid repository {value!r}: expected 'owner/name'")
     return _RepoTarget(value, owner, name)
 
 
@@ -178,13 +183,14 @@ def _refs_field(kind: RefKind, *, after: str | None = None) -> str:
     )
 
 
-def _parse_chunk(
+def _resolve_chunk(
     http: HttpClient,
     endpoint: str,
     chunk: tuple[_RepoTarget, ...],
     kinds: tuple[RefKind, ...],
     payload: dict[str, Any],
 ) -> tuple[list[RepoRefs], list[str], int | None]:
+    """Parse one chunk payload; issues follow-up POSTs for ref pagination."""
     missing_aliases = _classify_errors(payload)
     data = payload.get("data") or {}
     found: list[RepoRefs] = []
@@ -201,7 +207,7 @@ def _parse_chunk(
                 )
             missing.append(target.full_name)
             continue
-        repo_refs, page_remaining = _collect_repo(http, endpoint, target, node, kinds)
+        repo_refs, page_remaining = _resolve_repo(http, endpoint, target, node, kinds)
         if page_remaining is not None:
             remaining = page_remaining
         found.append(repo_refs)
@@ -220,7 +226,7 @@ def _classify_errors(payload: dict[str, Any]) -> set[str]:
     return missing
 
 
-def _collect_repo(
+def _resolve_repo(
     http: HttpClient,
     endpoint: str,
     target: _RepoTarget,
@@ -261,7 +267,13 @@ def _collect_repo(
 
 
 def _parse_ref_nodes(kind: RefKind, nodes: list[dict[str, Any]]) -> list[RepoRef]:
-    return [RepoRef(kind=kind, name=node["name"], sha=_peel_oid(node["target"])) for node in nodes]
+    # GitHub's schema allows ``Ref.target`` to be null; a ref without a
+    # resolvable object is useless to the freshness probe, so skip it.
+    return [
+        RepoRef(kind=kind, name=node["name"], sha=_peel_oid(node["target"]))
+        for node in nodes
+        if node.get("target") is not None
+    ]
 
 
 def _peel_oid(target: dict[str, Any]) -> str:

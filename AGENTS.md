@@ -78,7 +78,7 @@ src/untaped_github/
 ├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
 ├── domain/               # pure models and query value objects
-└── infrastructure/       # GitHub REST/GraphQL client, pagination, graphql
+└── infrastructure/       # GithubClient, REST pagination, GraphQL ref probe
 ```
 
 The plugin object's `manifest()` declares `GithubSettings` as the `github`
@@ -167,9 +167,10 @@ behaviors:
   `base_url`, so a relative path would join to `/api/v3/graphql` on GHE.
 - **Aliases `r0..rN` map back to input order** within each chunk; each
   chunk is one POST built from escaped GraphQL literals (`json.dumps`).
-- **Annotated tags are peeled.** The query selects nested
-  `target { oid }` two levels deep (covers tags-of-tags); `RepoRef.sha`
-  is always the commit oid, falling back to the outermost oid present.
+- **Annotated tags are peeled up to two levels.** The query selects
+  nested `target { oid }` two levels deep (covers tags-of-tags);
+  `RepoRef.sha` is the deepest fetched oid, so deeper tag chains return
+  the innermost fetched oid rather than the final commit.
 - **`kinds=("heads",)` omits the tags connection entirely**, halving the
   per-repo point cost.
 - **Missing repos don't raise.** A `null` data node plus a `NOT_FOUND`
@@ -202,7 +203,7 @@ Future high-volume features should honor `X-RateLimit-Remaining` and
 `X-RateLimit-Reset`, and back off on `429 Too Many Requests`.
 
 GraphQL (`batch_repo_refs`) draws on a separate 5000 points/hour budget;
-see "GraphQL Batched Ref Probe" below for cost math.
+see "GraphQL Batched Ref Probe" above for cost math.
 
 ## Search
 
