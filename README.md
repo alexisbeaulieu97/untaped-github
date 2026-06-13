@@ -30,7 +30,7 @@ to install it for Codex or Claude.
 ```bash
 untaped config set github.token ghp_xxx
 untaped github whoami
-untaped github whoami --profile work
+untaped --profile work github whoami    # --profile needs the untaped-profile plugin
 ```
 
 For GitHub Enterprise Server, configure the API base URL explicitly:

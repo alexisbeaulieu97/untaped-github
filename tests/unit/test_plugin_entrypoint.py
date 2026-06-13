@@ -116,7 +116,7 @@ def test_config_list_includes_registered_github_settings() -> None:
 
 
 def test_config_list_redacts_github_token(_isolate_config: Path) -> None:
-    _isolate_config.write_text("profiles:\n  default:\n    github:\n      token: ghp_secret\n")
+    _isolate_config.write_text("github:\n  token: ghp_secret\n")
     app = build_app(plugins=[github_plugin])
 
     result = CliInvoker().invoke(
@@ -129,7 +129,7 @@ def test_config_list_redacts_github_token(_isolate_config: Path) -> None:
 
 
 def test_root_app_uses_registered_github_settings(_isolate_config: Path) -> None:
-    _isolate_config.write_text("profiles:\n  default:\n    github:\n      token: ghp_test\n")
+    _isolate_config.write_text("github:\n  token: ghp_test\n")
     app = build_app(plugins=[github_plugin])
 
     with respx.mock(base_url="https://api.github.com") as mock:
