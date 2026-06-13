@@ -9,13 +9,15 @@ workflow, update this file in the same commit.
 `untaped-github` is an `untaped` plugin. It owns the `untaped github`
 command group for authenticated user inspection and GitHub REST search
 (`repos`, `code`, `issues`, `users`). `untaped` core owns the binary,
-plugin discovery, config/profile resolution, output helpers, HTTP/TLS
-primitives, and shared errors.
+plugin discovery, config loading, output helpers, HTTP/TLS primitives, and
+shared errors. Profile selection is contributed by `untaped-profile`.
 
 ## Hard Rules
 
-1. **Keep `AGENTS.md` up to date.** Architecture changes and new command
-   patterns must be documented here.
+1. **Keep `AGENTS.md` and the packaged skill up to date.** Architecture
+   changes, new command patterns, settings changes, and major GitHub
+   workflow changes must be documented here and in
+   `src/untaped_github/skills/untaped-github/SKILL.md`.
 2. **Prefer `uv` commands over manual dependency edits.** Use `uv add` and
    `uv add --group dev`; hand-edit tool config only.
 3. **Expose the plugin through the `untaped.plugins` entry point.**
@@ -84,7 +86,8 @@ src/untaped_github/
 The plugin object's `manifest()` declares `GithubSettings` as the `github`
 profile settings section, mounts the Cyclopts app as the root `github`
 command through a lazy `CliSpec` import path, and contributes the packaged
-`untaped-github` agent skill. Plugin code reads typed settings with
+`untaped-github` agent skill. Keep that static skill asset current with major
+GitHub workflow changes. Plugin code reads typed settings with
 `plugin_context().section("github", GithubSettings)`, not a global
 aggregate `settings.github` attribute.
 
