@@ -15,7 +15,6 @@ from untaped.api import (
     ColumnsOption,
     ConfigError,
     FormatOption,
-    ProfileOverrideOption,
     create_app,
     echo,
     read_identifiers,
@@ -122,7 +121,6 @@ def repos_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
-    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search repositories (``GET /search/repositories``)."""
     from untaped_github.application import SearchRepos  # noqa: PLC0415
@@ -142,7 +140,7 @@ def repos_command(
             sort=sort,
             limit=limit,
         )
-        with open_client(profile) as client:
+        with open_client() as client:
             use_case = SearchRepos(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
@@ -165,7 +163,6 @@ def code_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
-    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search code (``GET /search/code``).
 
@@ -188,7 +185,7 @@ def code_command(
             extension=extension,
             limit=limit,
         )
-        with open_client(profile) as client:
+        with open_client() as client:
             use_case = SearchCode(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
@@ -220,7 +217,6 @@ def issues_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
-    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search issues and pull requests (``GET /search/issues``)."""
     from untaped_github.application import SearchIssues  # noqa: PLC0415
@@ -241,7 +237,7 @@ def issues_command(
             sort=sort,
             limit=limit,
         )
-        with open_client(profile) as client:
+        with open_client() as client:
             use_case = SearchIssues(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
             rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
@@ -262,7 +258,6 @@ def users_command(
     limit: SearchLimitOption = 30,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
-    profile: ProfileOverrideOption = None,
 ) -> None:
     """Search users and organizations (``GET /search/users``)."""
     from untaped_github.application import SearchUsers  # noqa: PLC0415
@@ -277,6 +272,6 @@ def users_command(
             sort=sort,
             limit=limit,
         )
-        with open_client(profile) as client:
+        with open_client() as client:
             rows = [r.model_dump() for r in SearchUsers(client)(filters)]
         echo(render_rows(rows, fmt=fmt, columns=columns))

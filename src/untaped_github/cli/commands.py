@@ -5,7 +5,6 @@ from __future__ import annotations
 from untaped.api import (
     ColumnsOption,
     FormatOption,
-    ProfileOverrideOption,
     create_app,
     echo,
     render_rows,
@@ -26,12 +25,11 @@ def whoami_command(
     *,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
-    profile: ProfileOverrideOption = None,
 ) -> None:
     """Show the authenticated GitHub user (``GET /user``)."""
     from untaped_github.application import WhoAmI  # noqa: PLC0415
 
-    with report_errors(), open_client(profile) as client:
+    with report_errors(), open_client() as client:
         user = WhoAmI(client)()
         echo(render_rows([user.model_dump()], fmt=fmt, columns=columns))
 

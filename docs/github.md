@@ -12,9 +12,9 @@ untaped config set github.token ghp_xxx        # personal access token
 untaped github whoami                           # confirm it works
 ```
 
-Every GitHub command that reads profile settings accepts command-local
-`--profile <name>`, so the selector can stay next to the command:
-`untaped github whoami --profile work`. The root form still works too:
+Profile selection is the root `--profile <name>` option contributed by the
+[`untaped-profile`](https://github.com/alexisbeaulieu97/untaped-profile)
+plugin (install it to use profiles); place it before the command group:
 `untaped --profile work github whoami`.
 
 The token is stored as a secret: `untaped config list` shows `***`, not
@@ -35,7 +35,7 @@ untaped config set github.base_url https://github.example.com/api/v3
 
 ```bash
 untaped github whoami
-untaped github whoami --profile work
+untaped --profile work github whoami
 untaped github whoami --format json
 untaped github whoami --format raw --columns login
 ```
@@ -55,7 +55,7 @@ Every scoped subcommand defaults to `user:@me` when you pass no `--user`,
 
 ```bash
 untaped github search repos --language python
-untaped github search repos --language python --profile work
+untaped --profile work github search repos --language python
 untaped github search repos --name client --language Go
 untaped github search repos --org acme --visibility private
 untaped github search repos --team acme/backend
