@@ -1,6 +1,6 @@
 """Untaped plugin manifest for the GitHub domain.
 
-API v3: the plugin object declares ``id``, ``untaped_api_version = 3``, and
+API v5: the plugin object declares ``id``, ``untaped_api_version = 5``, and
 returns its contributions as data from ``manifest()``. The CLI is mounted
 through a ``CliSpec`` import path so ``untaped --help`` never imports the
 GitHub command modules.

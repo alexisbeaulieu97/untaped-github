@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -73,6 +74,19 @@ def test_whoami_demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "octocat"
+
+
+def test_whoami_pipe_tags_github_user_kind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
+        result = CliInvoker().invoke(app, ["whoami", "--format", "pipe"])
+
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout.splitlines()[0])
+    assert envelope["kind"] == "github.user"
+    assert envelope["record"]["login"] == "octocat"
 
 
 def test_whoami_table_honors_list_collection_view(

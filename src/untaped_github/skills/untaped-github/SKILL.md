@@ -27,6 +27,11 @@ Use this skill when the user wants an agent to operate `untaped github` for auth
 ## Agent Guidance
 
 - Prefer `--format json` for structured search results.
+- Use `--format pipe` to chain a search into another untaped command: each
+  record is tagged (`github.repo`/`github.code`/...), and `--repo-stdin` reads a
+  `--format pipe` stream back (mapping `full_name`) as well as bare `owner/name`
+  lines — e.g. `untaped github search repos --org acme --format pipe | untaped
+  github search code "BaseModel" --repo-stdin`.
 - Use `--limit` intentionally; GitHub search has stricter rate limits than normal REST reads.
 - When no repo/org/user/team scope is passed to repo/code/issue search, the plugin defaults to the authenticated user.
 - Repeated repo scopes are ORed together; do not rewrite them as separate AND qualifiers.
