@@ -20,7 +20,7 @@ class GithubPlugin:
     """Entry-point plugin object exposed through ``untaped.plugins``."""
 
     id = "github"
-    untaped_api_version = 3
+    untaped_api_version = 5
 
     def manifest(self) -> PluginManifest:
         """Declare the GitHub CLI, profile settings, and agent skill."""

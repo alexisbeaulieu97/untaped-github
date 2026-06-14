@@ -793,3 +793,152 @@ def test_search_team_slug_with_multiple_orgs_errors(
     )
     assert result.exit_code != 0
     assert "ORG/SLUG" in result.output
+
+
+_EMPTY_SEARCH = {"total_count": 0, "incomplete_results": False, "items": []}
+
+
+def test_search_repos_empty_table_guides_with_stderr_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=_EMPTY_SEARCH))
+        result = CliInvoker().invoke(app, ["search", "repos", "--language", "cobol"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "No repositories found" in result.stderr
+
+
+def test_search_code_empty_table_guides_with_stderr_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/code").mock(return_value=httpx.Response(200, json=_EMPTY_SEARCH))
+        result = CliInvoker().invoke(app, ["search", "code", "--language", "cobol"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "No code matches found" in result.stderr
+
+
+def test_search_issues_empty_table_guides_with_stderr_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/issues").mock(return_value=httpx.Response(200, json=_EMPTY_SEARCH))
+        result = CliInvoker().invoke(app, ["search", "issues", "--state", "open"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "No issues or pull requests found" in result.stderr
+
+
+def test_search_users_empty_table_guides_with_stderr_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/users").mock(return_value=httpx.Response(200, json=_EMPTY_SEARCH))
+        result = CliInvoker().invoke(app, ["search", "users", "zzunlikelyhandle"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "No users or organizations found" in result.stderr
+
+
+def test_search_empty_json_stays_pipe_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=_EMPTY_SEARCH))
+        result = CliInvoker().invoke(
+            app, ["search", "repos", "--language", "cobol", "--format", "json"]
+        )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "[]"
+    assert "No repositories found" not in result.stderr
+
+
+def test_search_repos_reports_progress_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    payload = {
+        "total_count": 1,
+        "incomplete_results": False,
+        "items": [
+            {
+                "id": 1,
+                "name": "alpha",
+                "full_name": "octocat/alpha",
+                "html_url": "https://github.com/octocat/alpha",
+            }
+        ],
+    }
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "--language",
+                "python",
+                "--format",
+                "raw",
+                "--columns",
+                "full_name",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    # Progress announces on stderr; the data channel stays clean.
+    assert "Searching repositories" in result.stderr
+    assert result.stdout.splitlines() == ["octocat/alpha"]
+    assert "Searching repositories" not in result.stdout
+
+
+def test_search_with_invalid_theme_still_runs_and_reports_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The progress UiContext is built strict=False, so a misconfigured theme
+    # degrades the spinner to the default theme instead of failing an
+    # otherwise-valid search on the data path.
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_missing_theme_config(tmp_path)))
+    payload = {
+        "total_count": 1,
+        "incomplete_results": False,
+        "items": [
+            {
+                "id": 1,
+                "name": "alpha",
+                "full_name": "octocat/alpha",
+                "html_url": "https://github.com/octocat/alpha",
+            }
+        ],
+    }
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=payload))
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "--language",
+                "python",
+                "--format",
+                "raw",
+                "--columns",
+                "full_name",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == ["octocat/alpha"]
+    assert "Searching repositories" in result.stderr
