@@ -140,11 +140,19 @@ def repos_command(
             sort=sort,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client() as (client, ui):
             use_case = SearchRepos(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
-            rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        echo(render_rows(rows, fmt=fmt, columns=columns))
+            with ui.progress("Searching repositories…"):
+                rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
+        rendered = render_rows(
+            rows,
+            fmt=fmt,
+            columns=columns,
+            empty="No repositories found. Broaden your query or remove scope filters.",
+        )
+        if rendered:
+            echo(rendered)
 
 
 @app.command(name="code")
@@ -185,11 +193,19 @@ def code_command(
             extension=extension,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client() as (client, ui):
             use_case = SearchCode(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
-            rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        echo(render_rows(rows, fmt=fmt, columns=columns))
+            with ui.progress("Searching code…"):
+                rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
+        rendered = render_rows(
+            rows,
+            fmt=fmt,
+            columns=columns,
+            empty="No code matches found. Check syntax, language, and repository scope.",
+        )
+        if rendered:
+            echo(rendered)
 
 
 @app.command(name="issues")
@@ -237,11 +253,20 @@ def issues_command(
             sort=sort,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client() as (client, ui):
             use_case = SearchIssues(client, client, warn=_stderr_warn)
             team_scopes = _parse_team_scopes(team)
-            rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        echo(render_rows(rows, fmt=fmt, columns=columns))
+            with ui.progress("Searching issues and pull requests…"):
+                rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
+        rendered = render_rows(
+            rows,
+            fmt=fmt,
+            columns=columns,
+            empty="No issues or pull requests found. Expand your query or check "
+            "state/label filters.",
+        )
+        if rendered:
+            echo(rendered)
 
 
 @app.command(name="users")
@@ -272,6 +297,13 @@ def users_command(
             sort=sort,
             limit=limit,
         )
-        with open_client() as client:
+        with open_client() as (client, ui), ui.progress("Searching users…"):
             rows = [r.model_dump() for r in SearchUsers(client)(filters)]
-        echo(render_rows(rows, fmt=fmt, columns=columns))
+        rendered = render_rows(
+            rows,
+            fmt=fmt,
+            columns=columns,
+            empty="No users or organizations found. Try different keywords or filters.",
+        )
+        if rendered:
+            echo(rendered)

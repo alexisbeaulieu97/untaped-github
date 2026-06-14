@@ -60,7 +60,7 @@ def test_github_plugin_entry_point_is_declared() -> None:
 
 
 def test_github_plugin_declares_untaped_api_version() -> None:
-    assert github_plugin.untaped_api_version == 3
+    assert github_plugin.untaped_api_version == 5
 
 
 def test_manifest_mounts_github_cli_lazily() -> None:

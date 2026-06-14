@@ -29,8 +29,9 @@ def whoami_command(
     """Show the authenticated GitHub user (``GET /user``)."""
     from untaped_github.application import WhoAmI  # noqa: PLC0415
 
-    with report_errors(), open_client() as client:
-        user = WhoAmI(client)()
+    with report_errors(), open_client() as (client, ui):
+        with ui.progress("Fetching authenticated user…"):
+            user = WhoAmI(client)()
         echo(render_rows([user.model_dump()], fmt=fmt, columns=columns))
 
 
