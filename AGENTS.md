@@ -23,7 +23,7 @@ shared errors. Profile selection is contributed by `untaped-profile`.
 3. **Expose the plugin through the `untaped.plugins` entry point.**
    `github = "untaped_github.plugin:plugin"` is the public integration point.
    The plugin object must expose `id = "github"`, literal
-   `untaped_api_version = 3`, and `manifest()` returning a `PluginManifest`.
+   `untaped_api_version = 5`, and `manifest()` returning a `PluginManifest`.
    The manifest mounts the CLI lazily via
    `CliSpec(name="github", import_path="untaped_github.cli:app", help=...)`
    — `plugin.py` must never import the CLI app, and
@@ -75,7 +75,7 @@ shared errors. Profile selection is contributed by `untaped-profile`.
 ```text
 src/untaped_github/
 ├── __init__.py           # small root API: GithubClient, GithubSettings, lazy app
-├── plugin.py             # entry-point plugin object (v3 manifest)
+├── plugin.py             # entry-point plugin object (v5 manifest)
 ├── settings.py           # plugin-owned config model
 ├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
@@ -264,10 +264,18 @@ conservative: the generated OR group expands quickly under GitHub's search
 query length budget, and users can pass explicit `--repo` scopes when they
 intentionally want a wider query.
 
-`--repo-stdin` reads newline-separated `owner/name` scopes with core
-`read_identifiers([], stdin=True)` and appends them to explicit `--repo`
-values before the filter object is constructed. Keep this in the CLI layer:
-application use cases should receive already-parsed `repos` and
+`--repo-stdin` reads repo scopes with core
+`read_identifiers([], stdin=True, id_field="full_name")` and appends them to
+explicit `--repo` values before the filter object is constructed. It accepts
+either bare newline-separated `owner/name` lines **or** an untaped `--format
+pipe` stream (each record's `full_name` is extracted), so `untaped github search
+repos --format pipe | untaped github search code --repo-stdin` composes. Only
+`github.repo` records carry `full_name`, so only a `search repos` pipe feeds
+`--repo-stdin`; piping `code`/`issue`/`user` output into it fails loud with a
+line-precise error. The search commands and `whoami`
+tag their output via `render_rows(..., kind="github.<repo|code|issue|user>")`.
+Keep this in the CLI
+layer: application use cases should receive already-parsed `repos` and
 `TeamScope` values, not own stdin.
 
 ### Pagination

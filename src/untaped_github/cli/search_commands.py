@@ -87,7 +87,7 @@ def _repo_scopes(values: list[str] | None, *, repo_stdin: bool) -> tuple[str, ..
     """Merge explicit ``--repo`` values with optional stdin repo scopes."""
     repos = list(values or ())
     if repo_stdin:
-        repos.extend(read_identifiers([], stdin=True))
+        repos.extend(read_identifiers([], stdin=True, id_field="full_name"))
     return tuple(repos)
 
 
@@ -149,6 +149,7 @@ def repos_command(
             rows,
             fmt=fmt,
             columns=columns,
+            kind="github.repo",
             empty="No repositories found. Broaden your query or remove scope filters.",
         )
         if rendered:
@@ -202,6 +203,7 @@ def code_command(
             rows,
             fmt=fmt,
             columns=columns,
+            kind="github.code",
             empty="No code matches found. Check syntax, language, and repository scope.",
         )
         if rendered:
@@ -262,6 +264,7 @@ def issues_command(
             rows,
             fmt=fmt,
             columns=columns,
+            kind="github.issue",
             empty="No issues or pull requests found. Expand your query or check "
             "state/label filters.",
         )
@@ -303,6 +306,7 @@ def users_command(
             rows,
             fmt=fmt,
             columns=columns,
+            kind="github.user",
             empty="No users or organizations found. Try different keywords or filters.",
         )
         if rendered:

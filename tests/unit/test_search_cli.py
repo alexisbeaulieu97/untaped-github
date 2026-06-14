@@ -419,6 +419,48 @@ def test_search_code_combines_explicit_and_stdin_repo_scopes(
     assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:acme/web)"
 
 
+def test_search_repos_pipe_feeds_code_repo_stdin_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end proof of the typed pipe: ``search repos --format pipe`` emits
+    self-describing ``github.repo`` envelopes, and ``search code --repo-stdin``
+    reads them back, mapping each record's ``full_name`` into the repo scope."""
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    repos_payload = {
+        "items": [
+            {"id": 1, "name": "api", "full_name": "acme/api", "html_url": "https://x/acme/api"},
+            {"id": 2, "name": "web", "full_name": "acme/web", "html_url": "https://x/acme/web"},
+        ]
+    }
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(return_value=httpx.Response(200, json=repos_payload))
+        code_route = mock.get("/search/code").mock(
+            return_value=httpx.Response(200, json={"items": []})
+        )
+
+        produced = CliInvoker().invoke(
+            app, ["search", "repos", "--org", "acme", "--format", "pipe"]
+        )
+        assert produced.exit_code == 0, produced.output
+        lines = [line for line in produced.stdout.splitlines() if line.strip()]
+        assert len(lines) == 2
+        for line in lines:
+            envelope = json.loads(line)
+            assert envelope["untaped"] == "1"
+            assert envelope["kind"] == "github.repo"
+            assert "full_name" in envelope["record"]
+
+        consumed = CliInvoker().invoke(
+            app,
+            ["search", "code", "TODO", "--repo-stdin", "--format", "json"],
+            input=produced.stdout,
+        )
+
+    assert consumed.exit_code == 0, consumed.output
+    assert code_route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:acme/web)"
+
+
 def test_search_issues_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
 
