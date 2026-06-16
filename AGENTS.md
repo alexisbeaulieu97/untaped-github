@@ -85,20 +85,20 @@ The CLI declares `GithubSettings` as its `github` settings section, mounts
 the Cyclopts `app` as the root command, and ships the packaged
 `untaped-github` agent skill. Keep that static skill asset current with major
 GitHub workflow changes. Command code reads typed settings with
-`plugin_context().section("github", GithubSettings)`, not a global
+`app_context().section("github", GithubSettings)`, not a global
 aggregate `settings.github` attribute.
 
 ## Auth Model
 
 GitHub uses bearer-token auth. The token is a `SecretStr` read through
-`plugin_context().section("github", GithubSettings)` or
+`app_context().section("github", GithubSettings)` or
 `UNTAPED_GITHUB__TOKEN`. The CLI composition root reads it once and passes
 the narrowed `GithubSettings` into `GithubClient`. Adapters never read the
 full SDK settings aggregate directly.
 
 Profile selection is owned by the SDK: the `--profile` option works in any
 token position, so commands define no command-local `--profile` parameter.
-Commands call bare `open_client()`, which calls `plugin_context()`; the SDK
+Commands call bare `open_client()`, which calls `app_context()`; the SDK
 resolves settings exactly once under the active profile and returns a frozen
 context (`ctx.section(...)` for the `github` section, `ctx.http` for SDK
 HTTP settings) without leaking into ambient process state.

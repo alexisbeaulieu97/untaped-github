@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from untaped.api import plugin_context
+from untaped.api import app_context
 
 from untaped_github.settings import GithubSettings
 
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 def open_client() -> Iterator[tuple[GithubClient, UiContext]]:
     """Build a :class:`GithubClient` and themed UI from a one-shot context.
 
-    ``plugin_context()`` resolves settings exactly once (honoring the root
+    ``app_context()`` resolves settings exactly once (honoring the root
     ``--profile`` selector applied by core) and hands back a frozen context;
     nothing leaks into ambient process state. The same context yields the
     themed :class:`UiContext` so commands can report progress without resolving
@@ -36,7 +36,7 @@ def open_client() -> Iterator[tuple[GithubClient, UiContext]]:
     """
     from untaped_github.infrastructure import GithubClient  # noqa: PLC0415
 
-    ctx = plugin_context()
+    ctx = app_context()
     # strict=False: a misconfigured theme must not fail an otherwise-valid
     # search/whoami. Progress is auxiliary feedback; it falls back to the
     # default theme rather than raising on the data path (e.g. --format raw).
