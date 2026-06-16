@@ -16,9 +16,9 @@ from untaped_github.settings import GithubSettings
 
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Iterator[None]:
-    # Invoking the github app directly skips plugin registration, so mirror
-    # the manifest's profile-settings contribution (idempotent for the same
-    # model class) before each test.
+    # Invoking the github app directly skips the SDK profile-settings
+    # registration, so mirror it (idempotent for the same model class)
+    # before each test.
     register_profile_settings("github", GithubSettings)
     get_settings.cache_clear()
     yield
@@ -127,7 +127,7 @@ def test_whoami_rejects_command_local_profile_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Profile selection moved to the root `untaped --profile` option
-    # (plugin API v4, accepted in any token position). The plugin's own
+    # (plugin API v4, accepted in any token position). The tool's own
     # commands no longer define a local --profile, so it must be rejected
     # as an unknown option (usage error, exit 2).
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
