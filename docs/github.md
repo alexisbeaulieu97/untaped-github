@@ -1,24 +1,25 @@
 # GitHub
 
-The GitHub plugin inspects the authenticated user and searches GitHub for
-repositories, code, issues/PRs, and users/orgs. All commands authenticate
-with the token from `github.token`. Scoped search commands default to the
+`untaped-github` is a standalone CLI, built on the
+[`untaped`](https://github.com/alexisbeaulieu97/untaped) SDK, that inspects
+the authenticated user and searches GitHub for repositories, code,
+issues/PRs, and users/orgs. All commands authenticate with the token from
+the tool's `token` setting. Scoped search commands default to the
 authenticated user, so bare scoped searches answer "what's mine?".
 
 ## Setup
 
 ```bash
-untaped config set github.token ghp_xxx        # personal access token
-untaped github whoami                           # confirm it works
+uv tool install untaped-github                  # install the CLI
+untaped-github config set token ghp_xxx         # bare key → this tool's section
+untaped-github whoami                           # confirm it works
 ```
 
-Profile selection is the root `--profile <name>` option contributed by the
-[`untaped-profile`](https://github.com/alexisbeaulieu97/untaped-profile)
-plugin (install it to use profiles); place it before the command group:
-`untaped --profile work github whoami`.
+Profile selection is built into the SDK: the `--profile <name>` option
+works in any token position, e.g. `untaped-github --profile work whoami`.
 
-The token is stored as a secret: `untaped config list` shows `***`, not
-the value. See the core
+The token is stored as a secret: `untaped-github config list` shows `***`,
+not the value. See the core
 [`configuration.md`](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/configuration.md)
 for the full config model.
 
@@ -26,7 +27,7 @@ You can also override the API base URL. For GitHub Enterprise Server,
 use the API path:
 
 ```bash
-untaped config set github.base_url https://github.example.com/api/v3
+untaped-github config set base_url https://github.example.com/api/v3
 ```
 
 ## Commands
@@ -34,34 +35,34 @@ untaped config set github.base_url https://github.example.com/api/v3
 ### `whoami`
 
 ```bash
-untaped github whoami
-untaped --profile work github whoami
-untaped github whoami --format json
-untaped github whoami --format raw --columns login
+untaped-github whoami
+untaped-github --profile work whoami
+untaped-github whoami --format json
+untaped-github whoami --format raw --columns login
 ```
 
 Calls `GET /user` and prints the authenticated user's profile. It is
 pipe-friendly for shell prompts and scripts:
 
 ```bash
-echo "[gh:$(untaped github whoami --format raw --columns login)]"
+echo "[gh:$(untaped-github whoami --format raw --columns login)]"
 ```
 
 ### `search`
 
-`untaped github search` exposes one subcommand per GitHub search endpoint.
+`untaped-github search` exposes one subcommand per GitHub search endpoint.
 Every scoped subcommand defaults to `user:@me` when you pass no `--user`,
 `--org`, `--repo`, or `--team`.
 
 ```bash
-untaped github search repos --language python
-untaped --profile work github search repos --language python
-untaped github search repos --name client --language Go
-untaped github search repos --org acme --visibility private
-untaped github search repos --team acme/backend
-untaped github search code "TODO" --language python
-untaped github search issues --state open --label bug --kind pr
-untaped github search users --kind org --location montreal
+untaped-github search repos --language python
+untaped-github --profile work search repos --language python
+untaped-github search repos --name client --language Go
+untaped-github search repos --org acme --visibility private
+untaped-github search repos --team acme/backend
+untaped-github search code "TODO" --language python
+untaped-github search issues --state open --label bug --kind pr
+untaped-github search users --kind org --location montreal
 ```
 
 Common flags for `repos`, `code`, and `issues`:
@@ -96,20 +97,20 @@ A free-text query goes as the first positional argument and is passed to
 GitHub's `q=` parameter:
 
 ```bash
-untaped github search code "func init" --language go
-untaped github search issues "memory leak" --state open
+untaped-github search code "func init" --language go
+untaped-github search issues "memory leak" --state open
 ```
 
 ## Pipe-Friendly Examples
 
 ```bash
-untaped github search repos --language python --format raw
+untaped-github search repos --language python --format raw
 
-untaped github search repos --org acme --format raw \
-  | untaped github search code "TODO" --repo-stdin --format raw --columns repo --columns path
+untaped-github search repos --org acme --format raw \
+  | untaped-github search code "TODO" --repo-stdin --format raw --columns repo --columns path
 
-untaped github search repos --org acme --format raw \
-  | untaped github search issues --state open --repo-stdin \
+untaped-github search repos --org acme --format raw \
+  | untaped-github search issues --state open --repo-stdin \
       --format raw --columns repo --columns number --columns title
 ```
 

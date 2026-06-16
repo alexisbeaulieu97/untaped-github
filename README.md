@@ -1,52 +1,44 @@
 # untaped-github
 
-`untaped-github` is the GitHub plugin for
-[`untaped`](https://github.com/alexisbeaulieu97/untaped). It adds the
-`untaped github` command group for authenticated user inspection and
-GitHub REST search across repositories, code, issues/PRs, and users/orgs.
+`untaped-github` is a standalone GitHub CLI built on the
+[`untaped`](https://github.com/alexisbeaulieu97/untaped) SDK. It provides
+authenticated user inspection and GitHub REST search across repositories,
+code, issues/PRs, and users/orgs, plus the shared `config`, `profile`, and
+`skills` command groups every untaped tool ships.
 
 ## Install
 
-Install both `untaped` and this plugin from git:
-
 ```bash
-uv tool install "git+https://github.com/alexisbeaulieu97/untaped.git@v0.1.4" \
-  --with "untaped-github @ git+https://github.com/alexisbeaulieu97/untaped-github.git@v0.3.0" \
-  --no-sources \
-  --force
+uv tool install untaped-github
 ```
-
-For managed plugin state, editable source installs, and multi-plugin sync
-examples, see the core
-[`untaped` plugin docs](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/plugins.md).
-
-This plugin also contributes the `untaped-github` agent skill. After the
-plugin is installed, use the core
-[`untaped` agent skill docs](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/skills.md)
-to install it for Codex or Claude.
 
 ## Configure
 
 ```bash
-untaped config set github.token ghp_xxx
-untaped github whoami
-untaped --profile work github whoami    # --profile needs the untaped-profile plugin
+untaped-github config set token --prompt   # bare key → this tool's section
+untaped-github whoami
+untaped-github --profile work whoami        # --profile works in any position
 ```
 
 For GitHub Enterprise Server, configure the API base URL explicitly:
 
 ```bash
-untaped config set github.base_url https://github.example.com/api/v3
+untaped-github config set base_url https://github.example.com/api/v3
 ```
+
+Settings are stored per profile in `~/.untaped/config.yml` (shared with the
+other untaped tools). `ui.theme` and `http.*` are addressed as globals
+(e.g. `untaped-github config set http.verify_ssl false`).
 
 ## Commands
 
 ```text
-untaped github whoami
-untaped github search repos [QUERY]
-untaped github search code [QUERY]
-untaped github search issues [QUERY]
-untaped github search users [QUERY]
+untaped-github whoami
+untaped-github search repos [QUERY]
+untaped-github search code [QUERY]
+untaped-github search issues [QUERY]
+untaped-github search users [QUERY]
+untaped-github config|profile|skills ...
 ```
 
 See [docs/github.md](./docs/github.md) for command details and examples.
@@ -59,7 +51,7 @@ uv run pytest
 uv run mypy
 uv run ruff check --fix
 uv run ruff format
-uv run untaped github --help
+uv run untaped-github --help
 ```
 
 See [AGENTS.md](./AGENTS.md) for architecture rules and GitHub-specific

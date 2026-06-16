@@ -1,16 +1,17 @@
 # AGENTS.md - `untaped-github`
 
-Single source of truth for this standalone plugin repo. If you change
+Single source of truth for this standalone CLI repo. If you change
 architecture, command behavior, settings behavior, or the development
 workflow, update this file in the same commit.
 
 ## Mission
 
-`untaped-github` is an `untaped` plugin. It owns the `untaped github`
-command group for authenticated user inspection and GitHub REST search
-(`repos`, `code`, `issues`, `users`). `untaped` core owns the binary,
-plugin discovery, config loading, output helpers, HTTP/TLS primitives, and
-shared errors. Profile selection is contributed by `untaped-profile`.
+`untaped-github` is a standalone CLI built on the `untaped` SDK, invoked as
+`untaped-github`. It provides authenticated user inspection and GitHub REST
+search (`repos`, `code`, `issues`, `users`). The `untaped` SDK owns config
+loading, output helpers, HTTP/TLS primitives, profile selection, and shared
+errors. Profile selection is built into the SDK and works in any token
+position.
 
 ## Hard Rules
 
@@ -20,15 +21,13 @@ shared errors. Profile selection is contributed by `untaped-profile`.
    `src/untaped_github/skills/untaped-github/SKILL.md`.
 2. **Prefer `uv` commands over manual dependency edits.** Use `uv add` and
    `uv add --group dev`; hand-edit tool config only.
-3. **Expose the plugin through the `untaped.plugins` entry point.**
-   `github = "untaped_github.plugin:plugin"` is the public integration point.
-   The plugin object must expose `id = "github"`, literal
-   `untaped_api_version = 5`, and `manifest()` returning a `PluginManifest`.
-   The manifest mounts the CLI lazily via
-   `CliSpec(name="github", import_path="untaped_github.cli:app", help=...)`
-   — `plugin.py` must never import the CLI app, and
-   `untaped_github/__init__.py` re-exports `app` only through a PEP 562
-   module `__getattr__` so `untaped --help` never imports the command tree.
+3. **Expose the CLI through the SDK entry point.**
+   `untaped_github/__init__.py` re-exports the Cyclopts `app` (and the
+   public client API) so the SDK's launcher can mount it as the
+   `untaped-github` command. Keep the root API import-light:
+   `__init__.py` re-exports `app` only through a PEP 562 module
+   `__getattr__` so importing the package never eagerly imports the command
+   tree.
 4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
    `infrastructure -> domain`; `application` and `infrastructure` must not
    import each other at runtime.
@@ -36,8 +35,8 @@ shared errors. Profile selection is contributed by `untaped-profile`.
    narrowest `Protocol`; concrete adapters satisfy ports structurally.
 6. **Use absolute imports, and import the SDK from `untaped.api`.**
    `from untaped_github...` and `from untaped.api import ...`, never
-   relative imports. `untaped.api` is the supported plugin SDK surface;
-   only tests may reach for `untaped.testing` (and core internals such as
+   relative imports. `untaped.api` is the supported SDK surface;
+   only tests may reach for `untaped.testing` (and SDK internals such as
    `untaped.main`/`untaped.settings` when a name is not exported by
    `untaped.api`).
 7. **Every source module has a module docstring.** Re-export `__init__.py`
@@ -64,7 +63,7 @@ shared errors. Profile selection is contributed by `untaped-profile`.
     invalid or missing themes never break pipe-friendly output.
 13. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
     `.get_secret_value()` only inside the HTTP adapter.
-14. **Build GitHub HTTP clients with `connected_client(...)`.** Core owns
+14. **Build GitHub HTTP clients with `connected_client(...)`.** The SDK owns
     required-field validation, bearer auth, base-URL normalization, and TLS
     resolution (`resolve_verify`); never hard-code TLS verification policy.
 15. **Finish with verification.** Run `uv run ruff check --fix`,
@@ -75,39 +74,36 @@ shared errors. Profile selection is contributed by `untaped-profile`.
 ```text
 src/untaped_github/
 ├── __init__.py           # small root API: GithubClient, GithubSettings, lazy app
-├── plugin.py             # entry-point plugin object (v5 manifest)
-├── settings.py           # plugin-owned config model
+├── settings.py           # config model for this tool's `github` section
 ├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
 ├── domain/               # pure models and query value objects
 └── infrastructure/       # GithubClient, REST pagination, GraphQL ref probe
 ```
 
-The plugin object's `manifest()` declares `GithubSettings` as the `github`
-profile settings section, mounts the Cyclopts app as the root `github`
-command through a lazy `CliSpec` import path, and contributes the packaged
+The CLI declares `GithubSettings` as its `github` settings section, mounts
+the Cyclopts `app` as the root command, and ships the packaged
 `untaped-github` agent skill. Keep that static skill asset current with major
-GitHub workflow changes. Plugin code reads typed settings with
-`plugin_context().section("github", GithubSettings)`, not a global
+GitHub workflow changes. Command code reads typed settings with
+`app_context().section("github", GithubSettings)`, not a global
 aggregate `settings.github` attribute.
 
 ## Auth Model
 
 GitHub uses bearer-token auth. The token is a `SecretStr` read through
-`plugin_context().section("github", GithubSettings)` or
+`app_context().section("github", GithubSettings)` or
 `UNTAPED_GITHUB__TOKEN`. The CLI composition root reads it once and passes
 the narrowed `GithubSettings` into `GithubClient`. Adapters never read the
-full core settings aggregate directly.
+full SDK settings aggregate directly.
 
-Profile selection is owned by core: the root `untaped --profile` option
-(plugin API v4) works in any token position, so plugin commands define no
-command-local `--profile` parameter. Commands call bare `open_client()`,
-which calls `plugin_context()`; core resolves settings exactly once under
-the active profile and returns a frozen context (`ctx.section(...)` for
-the `github` section, `ctx.http` for core HTTP settings) without leaking
-into ambient process state.
+Profile selection is owned by the SDK: the `--profile` option works in any
+token position, so commands define no command-local `--profile` parameter.
+Commands call bare `open_client()`, which calls `app_context()`; the SDK
+resolves settings exactly once under the active profile and returns a frozen
+context (`ctx.section(...)` for the `github` section, `ctx.http` for SDK
+HTTP settings) without leaking into ambient process state.
 
-`GithubClient.__init__` fail-fasts with `ConfigError` (via core's
+`GithubClient.__init__` fail-fasts with `ConfigError` (via the SDK's
 `connected_client` required-field validation) if the token is missing or
 whitespace-only. There is no anonymous-mode fallback;
 unauthenticated GitHub is rate-limited enough that supporting it inline
@@ -130,7 +126,7 @@ or call site that consumes it.
 
 ## HTTP Wiring
 
-`GithubClient` builds its `HttpClient` through core's
+`GithubClient` builds its `HttpClient` through the SDK's
 `connected_client(config, section="github", headers=..., http=...)`, which
 validates `base_url` and `token`, strips/normalizes them, and sets:
 
@@ -139,25 +135,25 @@ validates `base_url` and `token`, strips/normalizes them, and sets:
 - `Authorization: Bearer <token>` (added by `connected_client`)
 
 TLS comes from `resolve_verify(http)` inside `connected_client`, using
-core `HttpSettings`.
+the SDK's `HttpSettings`.
 
 ## Public Client API
 
 `untaped_github` intentionally re-exports `GithubClient` and
-`GithubSettings` for sibling plugins that need GitHub access, plus the
+`GithubSettings` for sibling untaped tools that need GitHub access, plus the
 `batch_repo_refs` result models (`BatchRepoRefsResult`, `RepoRefs`,
-`RepoRef`). Keep this surface small and tested. Cross-plugin consumers
+`RepoRef`). Keep this surface small and tested. Library consumers
 may use repository metadata, org/team repository listing, matching refs,
 batched ref probing, tree reads, and raw content reads. Add missing
 GitHub operations here rather than duplicating a GitHub client in
-another plugin or importing private CLI helpers.
+another tool or importing private CLI helpers.
 
 ## GraphQL Batched Ref Probe
 
 `GithubClient.batch_repo_refs(repos, *, kinds=("heads", "tags"),
 chunk_size=50)` probes branch/tag heads for many `owner/name` repos in
 few API calls (~1500 repos in ~30 POSTs at the default chunk size). It
-is the freshness probe consumed by sibling plugins instead of per-repo
+is the freshness probe consumed by sibling untaped tools instead of per-repo
 `git ls-remote`.
 
 Mechanics live in `infrastructure/graphql.py`, isolated the same way
@@ -225,7 +221,7 @@ The three scoped subcommands (`repos`, `code`, `issues`) accept `--user`,
 `--org` (repeatable), `--repo` (repeatable), `--repo-stdin`, and
 `--team ORG/SLUG` (repeatable). `search users` does not; GitHub's user-search endpoint
 ignores those qualifiers, so exposing them would mislead. All search
-commands share `--limit` and core `--format/-f` + `--columns/-c`.
+commands share `--limit` and the SDK's `--format/-f` + `--columns/-c`.
 
 Repeated `--repo` scopes render as one parenthesized OR group, e.g.
 `(repo:acme/api OR repo:acme/web)`, because GitHub treats whitespace as
@@ -240,7 +236,7 @@ code search results.
 `cli/search_commands.py` defines package-local `SearchLimitOption` and each
 subcommand supplies the default at the call site (`limit: SearchLimitOption =
 30`). Keep the alias local because its help text names GitHub's search cap,
-which is plugin-specific rather than core plumbing.
+which is specific to this tool rather than SDK plumbing.
 
 ### Default Scope Rule
 
@@ -264,12 +260,12 @@ conservative: the generated OR group expands quickly under GitHub's search
 query length budget, and users can pass explicit `--repo` scopes when they
 intentionally want a wider query.
 
-`--repo-stdin` reads repo scopes with core
+`--repo-stdin` reads repo scopes with the SDK's
 `read_identifiers([], stdin=True, id_field="full_name")` and appends them to
 explicit `--repo` values before the filter object is constructed. It accepts
 either bare newline-separated `owner/name` lines **or** an untaped `--format
-pipe` stream (each record's `full_name` is extracted), so `untaped github search
-repos --format pipe | untaped github search code --repo-stdin` composes. Only
+pipe` stream (each record's `full_name` is extracted), so `untaped-github search
+repos --format pipe | untaped-github search code --repo-stdin` composes. Only
 `github.repo` records carry `full_name`, so only a `search repos` pipe feeds
 `--repo-stdin`; piping `code`/`issue`/`user` output into it fails loud with a
 line-precise error. The search commands and `whoami`
@@ -285,7 +281,7 @@ until exhausted or `--limit` is hit. Search payloads nest rows under `items`;
 list payloads, such as team repos, return JSON arrays.
 
 `pagination.py` keeps only the GitHub knowledge — `Link`-header parsing and
-the payload shapes — as a fetch closure handed to core's `paginate_pages`,
+the payload shapes — as a fetch closure handed to the SDK's `paginate_pages`,
 which owns the loop, the limit, the cursor-cycle guard, and the
 100-page non-convergence cap (`UntapedError`).
 
@@ -303,12 +299,12 @@ Two efficiency/defense rules are load-bearing:
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
   `SearchUsers`, and their `Protocol` ports. Scope defaulting and
   team-to-repo resolution live here.
-- `infrastructure/`: `GithubClient` (wired via core `connected_client`),
-  `pagination.py` (REST Link-header mechanics over core `paginate_pages`),
+- `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
+  `pagination.py` (REST Link-header mechanics over the SDK's `paginate_pages`),
   and `graphql.py` (batched ref-probe query building and response
   parsing). Adapters satisfy application ports structurally and do not
   import `application`.
-- `cli/`: composition root. `cli/_client.open_client` reads the plugin config
+- `cli/`: composition root. `cli/_client.open_client` reads this tool's config
   and returns a context-managed `GithubClient`; top-level commands use it.
 
 ## Development Workflow
@@ -320,7 +316,7 @@ uv run pytest
 uv run mypy
 uv run ruff check --fix
 uv run ruff format
-uv run untaped github --help
+uv run untaped-github --help
 ```
 
 Use `pytest --no-cov` for tight local loops. Full `pytest` enforces the
@@ -338,12 +334,12 @@ coverage gate.
 5. Wire the Cyclopts command in `cli/commands.py` or `cli/search_commands.py`;
    keep stdout data-only and expose `--format`/`--columns` for data output.
 6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.
-7. Run `uv run untaped github <command> --help` plus the full verification
+7. Run `uv run untaped-github <command> --help` plus the full verification
    commands above.
 
 ## See Also
 
-- [`untaped` core](https://github.com/alexisbeaulieu97/untaped) - plugin
-  runtime, settings registry, config-file helpers, output helpers.
+- [`untaped` SDK](https://github.com/alexisbeaulieu97/untaped) - CLI
+  launcher, settings registry, config-file helpers, output helpers.
 - [`untaped` configuration docs](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/configuration.md)
   - user-facing profile, config, secrets, and TLS behavior.

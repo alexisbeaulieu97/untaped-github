@@ -1,7 +1,7 @@
 [project]
 name = "untaped-github"
-version = "0.5.1"
-description = "GitHub user and search plugin for untaped."
+version = "0.6.0"
+description = "GitHub user and search CLI built on the untaped SDK."
 authors = [
     { name = "Alexis Beaulieu", email = "alexisbeaulieu97@gmail.com" }
 ]
@@ -9,18 +9,15 @@ requires-python = ">=3.14"
 dependencies = [
     "cyclopts>=4.16.0,<5",
     "pydantic>=2.13.3",
-    "untaped>=0.5.1",
+    "untaped @ git+https://github.com/alexisbeaulieu97/untaped.git@v1.0.0",
 ]
 
-[project.entry-points."untaped.plugins"]
-github = "untaped_github.plugin:plugin"
+[project.scripts]
+untaped-github = "untaped_github.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12.0"]
 build-backend = "uv_build"
-
-[tool.uv.sources]
-untaped = { git = "https://github.com/alexisbeaulieu97/untaped" }
 
 [dependency-groups]
 dev = [
