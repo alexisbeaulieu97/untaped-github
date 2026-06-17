@@ -1,6 +1,6 @@
 [project]
 name = "untaped-github"
-version = "0.6.0"
+version = "0.7.0"
 description = "GitHub user and search CLI built on the untaped SDK."
 authors = [
     { name = "Alexis Beaulieu", email = "alexisbeaulieu97@gmail.com" }
@@ -9,7 +9,7 @@ requires-python = ">=3.14"
 dependencies = [
     "cyclopts>=4.16.0,<5",
     "pydantic>=2.13.3",
-    "untaped @ git+https://github.com/alexisbeaulieu97/untaped.git@v1.0.0",
+    "untaped @ git+https://github.com/alexisbeaulieu97/untaped.git@v2.0.0",
 ]
 
 [project.scripts]
