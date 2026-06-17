@@ -27,19 +27,28 @@ def _reset_settings_cache() -> Iterator[None]:
 
 def _write_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.yml"
-    cfg.write_text("github:\n  token: ghp_test\n")
+    cfg.write_text("profiles:\n  default:\n    github:\n      token: ghp_test\n")
     return cfg
 
 
 def _write_list_view_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.yml"
-    cfg.write_text("ui:\n  collection_view: list\ngithub:\n  token: ghp_test\n")
+    cfg.write_text(
+        "profiles:\n"
+        "  default:\n"
+        "    ui:\n"
+        "      collection_view: list\n"
+        "    github:\n"
+        "      token: ghp_test\n"
+    )
     return cfg
 
 
 def _write_missing_theme_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.yml"
-    cfg.write_text("ui:\n  theme: missing\ngithub:\n  token: ghp_test\n")
+    cfg.write_text(
+        "profiles:\n  default:\n    ui:\n      theme: missing\n    github:\n      token: ghp_test\n"
+    )
     return cfg
 
 
@@ -149,7 +158,7 @@ def test_whoami_requires_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_whoami_rejects_blank_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = tmp_path / "config.yml"
-    cfg.write_text('github:\n  token: "   "\n')
+    cfg.write_text('profiles:\n  default:\n    github:\n      token: "   "\n')
     monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
     result = CliInvoker().invoke(app, ["whoami"])
     assert result.exit_code != 0
