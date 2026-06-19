@@ -17,7 +17,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 
 ## Command Patterns
 
-- `untaped-github whoami` verifies the authenticated token and returns the current user.
+- `untaped-github whoami` verifies the authenticated token and returns the current user — a single entity, so it renders as a vertical detail view under `--format table` and a bare JSON object (`{…}`) under `--format json`.
 - `untaped-github search repos` searches repositories.
 - `untaped-github search code` searches code and does not support sort.
 - `untaped-github search issues` searches issues and pull requests.

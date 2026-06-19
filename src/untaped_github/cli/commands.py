@@ -6,8 +6,7 @@ from untaped.api import (
     ColumnsOption,
     FormatOption,
     create_app,
-    echo,
-    render_rows,
+    emit,
     report_errors,
 )
 
@@ -32,7 +31,7 @@ def whoami_command(
     with report_errors(), open_client() as (client, ui):
         with ui.progress("Fetching authenticated user…"):
             user = WhoAmI(client)()
-        echo(render_rows([user.model_dump()], fmt=fmt, columns=columns, kind="github.user"))
+        emit(user, fmt=fmt, columns=columns, kind="github.user")
 
 
 app.command(search_app, name="search")

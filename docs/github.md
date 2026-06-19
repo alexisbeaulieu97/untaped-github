@@ -41,8 +41,10 @@ untaped-github whoami --format json
 untaped-github whoami --format raw --columns login
 ```
 
-Calls `GET /user` and prints the authenticated user's profile. It is
-pipe-friendly for shell prompts and scripts:
+Calls `GET /user` and prints the authenticated user's profile. As a single
+entity it renders as a vertical key:value detail view under `--format table`
+and as a bare JSON object (`{…}`, not a one-element `[{…}]`) under
+`--format json`. It is pipe-friendly for shell prompts and scripts:
 
 ```bash
 echo "[gh:$(untaped-github whoami --format raw --columns login)]"

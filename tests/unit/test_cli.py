@@ -31,19 +31,6 @@ def _write_config(tmp_path: Path) -> Path:
     return cfg
 
 
-def _write_list_view_config(tmp_path: Path) -> Path:
-    cfg = tmp_path / "config.yml"
-    cfg.write_text(
-        "profiles:\n"
-        "  default:\n"
-        "    ui:\n"
-        "      collection_view: list\n"
-        "    github:\n"
-        "      token: ghp_test\n"
-    )
-    return cfg
-
-
 def _write_missing_theme_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.yml"
     cfg.write_text(
@@ -98,10 +85,26 @@ def test_whoami_pipe_tags_github_user_kind(tmp_path: Path, monkeypatch: pytest.M
     assert envelope["record"]["login"] == "octocat"
 
 
-def test_whoami_table_honors_list_collection_view(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    cfg = _write_list_view_config(tmp_path)
+def test_whoami_json_emits_bare_object(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single entity emits a bare JSON object ``{…}``, not a one-element
+    array ``[{…}]`` (the ``emit`` single-record contract)."""
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/user").mock(return_value=httpx.Response(200, json={"login": "octocat", "id": 1}))
+        result = CliInvoker().invoke(app, ["whoami", "--format", "json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, dict)
+    assert payload["login"] == "octocat"
+
+
+def test_whoami_table_renders_detail_view(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single entity renders as a vertical key:value detail view under the
+    default config — not a boxed one-row table (the ``emit`` single-record
+    contract). This is the behavioural change from ``render_rows([x])``."""
+    cfg = _write_config(tmp_path)
     monkeypatch.setenv("UNTAPED_CONFIG", str(cfg))
 
     with respx.mock(base_url="https://api.github.com") as mock:
@@ -111,6 +114,7 @@ def test_whoami_table_honors_list_collection_view(
     assert result.exit_code == 0, result.output
     assert "login: octocat" in result.stdout
     assert "id: 1" in result.stdout
+    # Detail view is vertical key:value lines, not a bordered table grid.
     assert "─" not in result.stdout
     assert "│" not in result.stdout
 
