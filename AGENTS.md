@@ -54,11 +54,11 @@ position.
     `login`; repo search rows start with `full_name`; issue search rows
     start with `repo`; user search rows start with `id`; code search rows
     start with `name`.
-11. **Human table output honors global UI settings.** GitHub row commands
+11. **Human table output honors profile UI settings.** GitHub row commands
     render `--format table` through the active settings-backed
-    `ui_context().collection(...)` so global themes and
+    `ui_context().collection(...)` so per-profile themes and
     `ui.collection_view` apply.
-12. **Structured output bypasses global themes.** `--format json`, `yaml`,
+12. **Structured output bypasses configured themes.** `--format json`, `yaml`,
     and `raw` render through a plain `UiContext().collection(...)` so
     invalid or missing themes never break pipe-friendly output.
 13. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
