@@ -27,8 +27,8 @@ untaped-github config set base_url https://github.example.com/api/v3
 ```
 
 Settings are stored per profile in `~/.untaped/config.yml` (shared with the
-other untaped tools). `ui.theme` and `http.*` are addressed as globals
-(e.g. `untaped-github config set http.verify_ssl false`).
+other untaped tools). Shared SDK settings such as `ui.theme` and `http.*` are
+per-profile keys too (e.g. `untaped-github config set http.verify_ssl false`).
 
 ## Commands
 
