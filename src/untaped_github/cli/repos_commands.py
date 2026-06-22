@@ -16,8 +16,9 @@ from untaped.api import (
     report_errors,
 )
 
-from untaped_github.application import TeamScope
+from untaped_github.application.scopes import TeamScope
 from untaped_github.cli._client import open_client
+from untaped_github.cli._scopes import OrgOption, TeamOption, parse_team_scopes
 
 PatternArgument = Annotated[
     str | None,
@@ -28,31 +29,7 @@ PatternArgument = Annotated[
         )
     ),
 ]
-OrgOption = Annotated[
-    list[str] | None,
-    Parameter(name="--org", help="GitHub org inventory scope. Repeatable.", consume_multiple=False),
-]
-TeamOption = Annotated[
-    list[str] | None,
-    Parameter(
-        name="--team",
-        help="Team ORG/SLUG inventory scope. Repeatable.",
-        consume_multiple=False,
-    ),
-]
-
 app = create_app(name="repos", help="List GitHub repository inventory from org/team scopes.")
-
-
-def _parse_team_scopes(values: list[str] | None) -> tuple[TeamScope, ...]:
-    scopes: list[TeamScope] = []
-    for value in values or ():
-        parts = value.split("/")
-        if len(parts) != 2 or not all(parts):
-            raise ConfigError("--team must be ORG/SLUG")
-        org, slug = parts
-        scopes.append(TeamScope(org=org, slug=slug))
-    return tuple(scopes)
 
 
 def _validate_args(
@@ -87,7 +64,10 @@ def list_command(
         Parameter(
             name="--regex",
             negative="",
-            help="Treat PATTERN as a case-insensitive regex instead of a glob.",
+            help=(
+                "Treat PATTERN as a case-insensitive, unanchored regex "
+                "substring instead of a whole-target glob."
+            ),
         ),
     ] = False,
     archived: Annotated[
@@ -103,7 +83,7 @@ def list_command(
 
     with report_errors():
         orgs = tuple(org or ())
-        team_scopes = _parse_team_scopes(team)
+        team_scopes = parse_team_scopes(team)
         _validate_args(pattern, regex=regex, orgs=orgs, team_scopes=team_scopes)
         filters = RepoListFilters(pattern=pattern, regex=regex, archived=archived, fork=fork)
         with open_client() as (client, ui), ui.progress("Listing repositories…"):

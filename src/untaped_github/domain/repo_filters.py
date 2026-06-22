@@ -21,11 +21,6 @@ def compile_repo_pattern(pattern: str, *, regex: bool = False) -> RepoMatcher:
     return lambda row: fnmatch.fnmatchcase(target(row).casefold(), glob)
 
 
-def repo_pattern_matches(row: RepoListResult, pattern: str, *, regex: bool = False) -> bool:
-    """Return whether ``row`` matches ``pattern`` under repo-list semantics."""
-    return compile_repo_pattern(pattern, regex=regex)(row)
-
-
 def _target_getter(pattern: str) -> Callable[[RepoListResult], str]:
     if "/" in pattern:
         return lambda row: row.full_name

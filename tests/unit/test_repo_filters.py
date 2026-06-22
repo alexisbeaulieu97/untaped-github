@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from untaped_github.domain.models import RepoListResult
-from untaped_github.domain.repo_filters import repo_pattern_matches
+from untaped_github.domain.repo_filters import compile_repo_pattern
 
 
 def _repo(full_name: str) -> RepoListResult:
@@ -35,18 +35,25 @@ def test_glob_pattern_targeting_is_slash_aware_and_case_insensitive(
         _repo("beta/worker"),
     ]
 
-    matched = [repo.full_name for repo in repos if repo_pattern_matches(repo, pattern)]
+    matcher = compile_repo_pattern(pattern)
+    matched = [repo.full_name for repo in repos if matcher(repo)]
 
     assert matched == expected
 
 
 def test_regex_pattern_targeting_is_slash_aware_and_case_insensitive() -> None:
     repos = [_repo("acme/API-service"), _repo("beta/api-service"), _repo("acme/worker")]
+    matcher = compile_repo_pattern(r"^acme/api-service$", regex=True)
 
-    matched = [
-        repo.full_name
-        for repo in repos
-        if repo_pattern_matches(repo, r"^acme/api-service$", regex=True)
-    ]
+    matched = [repo.full_name for repo in repos if matcher(repo)]
 
     assert matched == ["acme/API-service"]
+
+
+def test_regex_pattern_is_unanchored_by_default() -> None:
+    repos = [_repo("acme/play-api"), _repo("acme/display"), _repo("acme/workspace")]
+    matcher = compile_repo_pattern("play", regex=True)
+
+    matched = [repo.full_name for repo in repos if matcher(repo)]
+
+    assert matched == ["acme/play-api", "acme/display"]

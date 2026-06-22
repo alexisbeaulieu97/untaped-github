@@ -5,12 +5,12 @@ from untaped_github.application.ports import (
     GithubTeamService,
 )
 from untaped_github.application.repos import ListRepos, RepoListFilters
+from untaped_github.application.scopes import TeamScope
 from untaped_github.application.search import (
     SearchCode,
     SearchIssues,
     SearchRepos,
     SearchUsers,
-    TeamScope,
 )
 from untaped_github.application.whoami import WhoAmI
 

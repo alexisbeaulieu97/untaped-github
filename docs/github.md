@@ -68,10 +68,11 @@ and `--team ORG/SLUG`; it does not list user-owned repositories with a bare
 default or `--user`.
 
 `PATTERN` is optional and is applied locally after the selected scopes are
-fully paginated. It is a case-insensitive glob by default; pass `--regex`
-to use a case-insensitive regular expression. A pattern containing `/`
-matches `full_name` (`owner/name`); otherwise it matches the repository
-leaf `name`.
+fully paginated. It is a case-insensitive whole-target glob by default;
+pass `--regex` to use a case-insensitive, unanchored regular expression
+substring match. Use `^...$` when you want regex matching anchored to the
+whole target. A pattern containing `/` matches `full_name` (`owner/name`);
+otherwise it matches the repository leaf `name`.
 
 Examples:
 
@@ -89,8 +90,8 @@ Local filters:
 | `--team ORG/SLUG`          | Include all visible repos for a team.       |
 | `--archived/--no-archived` | Include or exclude archived repositories.   |
 | `--fork/--no-fork`         | Include or exclude forks.                   |
-| `--regex`                  | Treat `PATTERN` as a regex instead of glob. |
-| `--format`                 | `table` (default), `json`, `yaml`, `raw`.   |
+| `--regex`                  | Treat `PATTERN` as an unanchored regex.     |
+| `--format`                 | `table` (default), `json`, `yaml`, `raw`, `pipe`. |
 | `--columns`                | Repeatable; dotted paths supported.         |
 
 Rows are deduped by `full_name` and sorted by `full_name`. Use `--columns`
@@ -109,6 +110,8 @@ untaped-github repos list 'play*' \
 The workspace pipeline above deliberately uses `--format raw`: `repos list
 --format pipe` emits `github.repo` records, but `untaped-workspace add
 --stdin` reads bare URL lines today and does not consume typed pipe records.
+`search repos` and `repos list` both emit `github.repo` records, but their
+field sets differ; `full_name` is the shared stable identifier.
 
 `repos list` favors complete inventory over API minimization in v1. Local
 pattern and boolean filters do not reduce GitHub page count; the command
@@ -142,7 +145,7 @@ Common flags for `repos`, `code`, and `issues`:
 | `--repo-stdin`| Read `owner/name` repo scopes from stdin and append to `--repo`.      |
 | `--team ORG/SLUG` | Resolves the team's repos into an OR repo scope; repeatable.    |
 | `--limit N`   | Stop after N rows. Default `30`; GitHub search caps at 1000 rows.    |
-| `--format`    | `table` (default), `json`, `yaml`, `raw`.                            |
+| `--format`    | `table` (default), `json`, `yaml`, `raw`, `pipe`.                    |
 | `--columns`   | Repeatable; dotted paths supported.                                  |
 
 `--team` must be self-contained as `ORG/SLUG`; `--org` remains a search

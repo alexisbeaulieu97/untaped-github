@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from untaped_github.application.ports import GithubRepoListService
-from untaped_github.application.search import TeamScope
+from untaped_github.application.scopes import TeamScope
 from untaped_github.domain import RepoListResult
 from untaped_github.domain.repo_filters import compile_repo_pattern
 

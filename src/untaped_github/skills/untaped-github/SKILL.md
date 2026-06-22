@@ -18,7 +18,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 ## Command Patterns
 
 - `untaped-github whoami` verifies the authenticated token and returns the current user — a single entity, so it renders as a vertical detail view under `--format table` and a bare JSON object (`{…}`) under `--format json`.
-- `untaped-github repos list [PATTERN] --org ORG --team ORG/SLUG` lists complete org/team repository inventory from GitHub list APIs.
+- `untaped-github repos list [PATTERN] --org ORG | --team ORG/SLUG` lists complete org/team repository inventory from GitHub list APIs with at least one repeatable scope.
 - `untaped-github search repos` searches repositories.
 - `untaped-github search code` searches code and does not support sort.
 - `untaped-github search issues` searches issues and pull requests.
@@ -26,7 +26,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 - Search commands support scoped selectors such as `--user`, repeatable `--org`, repeatable `--repo`, and repeatable `--team ORG/SLUG` where applicable.
 - Always include the owning organization in the `--team` value.
 - `repos list` requires explicit `--org` or `--team` scopes; it does not default to the authenticated user's repositories.
-- In `repos list`, `PATTERN` is a case-insensitive glob by default; `--regex` switches it to a case-insensitive regex. Patterns with `/` match `full_name`, otherwise they match repo `name`.
+- In `repos list`, `PATTERN` is a case-insensitive whole-target glob by default; `--regex` switches it to a case-insensitive, unanchored regex substring match. Patterns with `/` match `full_name`, otherwise they match repo `name`.
 - Use `repos list --no-archived --no-fork --format raw --columns ssh_url` to produce cloneable URL lines for `untaped-workspace add --stdin`.
 
 ## Agent Guidance

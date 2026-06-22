@@ -145,6 +145,17 @@ def test_repos_list_rejects_regex_without_pattern(
     assert "--regex requires PATTERN" in result.output
 
 
+def test_repos_list_rejects_malformed_team_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(app, ["repos", "list", "--org", "acme", "--team", "backend"])
+
+    assert result.exit_code != 0
+    assert "ORG/SLUG" in result.output
+
+
 def test_repos_list_rejects_invalid_regex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
 
@@ -164,4 +175,5 @@ def test_repos_list_help_documents_pattern_targeting(
     assert result.exit_code == 0, result.output
     assert "glob" in result.output
     assert "full_name" in result.output
+    assert "unanchored" in result.output
     assert "--regex" in result.output

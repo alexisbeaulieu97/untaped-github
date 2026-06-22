@@ -216,8 +216,9 @@ or `--user` scope in v1; user-owned inventory would require a separate
 `/user/repos` design.
 
 `repos list [PATTERN]` filters locally after fully paginating the selected
-scopes. `PATTERN` is a case-insensitive glob by default; `--regex` treats it
-as a case-insensitive regular expression. A pattern containing `/` matches
+scopes. `PATTERN` is a case-insensitive whole-target glob by default;
+`--regex` treats it as a case-insensitive, unanchored regular expression
+substring match; use `^...$` to anchor it. A pattern containing `/` matches
 `full_name`; otherwise it matches the repository leaf `name`. The command
 also supports local `--archived/--no-archived` and `--fork/--no-fork`
 filters. After filtering, rows are deduped by `full_name` and sorted
@@ -231,7 +232,10 @@ future work.
 Repo-list rows use a dedicated `RepoListResult` model so adding inventory
 fields does not change `search repos` output. The first field stays
 `full_name`; common pipe columns include `ssh_url`, `clone_url`,
-`default_branch`, `private`, `archived`, and `fork`.
+`default_branch`, `private`, `archived`, and `fork`. Both `search repos`
+and `repos list` emit `github.repo` pipe records, but their field sets are
+not identical; consumers should key on `full_name` or request explicit
+columns.
 
 `repos list --format pipe` is tagged as `kind="github.repo"` for consistency
 with other repo row producers. `untaped-workspace add --stdin` does not
@@ -337,9 +341,9 @@ Two efficiency/defense rules are load-bearing:
   `queries.py`, and pure repo inventory pattern helpers in
   `repo_filters.py`. Query/filter helpers do no I/O.
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
-  `SearchUsers`, `ListRepos`, and their `Protocol` ports. Scope defaulting,
-  team-to-repo resolution, repo-list enumeration, dedupe, and ordering live
-  here.
+  `SearchUsers`, `ListRepos`, shared scope value objects, and their
+  `Protocol` ports. Scope defaulting, team-to-repo resolution, repo-list
+  enumeration, dedupe, and ordering live here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
   `pagination.py` (REST Link-header mechanics over the SDK's `paginate_pages`),
   and `graphql.py` (batched ref-probe query building and response

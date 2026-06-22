@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
 from pydantic import BaseModel
 
 from untaped_github.application.ports import GithubSearchService, GithubTeamService
+from untaped_github.application.scopes import TeamScope
 from untaped_github.domain import (
     CodeResult,
     CodeSearchFilters,
@@ -29,14 +29,6 @@ WarnFn = Callable[[str], None]
 # query budget while still covering the common "backend owns a few repos"
 # case; users can pass explicit --repo values when they need a wider query.
 MAX_TEAM_REPO_QUALIFIERS = 6
-
-
-@dataclass(frozen=True)
-class TeamScope:
-    """A GitHub team scoped by owning organization."""
-
-    org: str
-    slug: str
 
 
 def _noop(_: str) -> None:
