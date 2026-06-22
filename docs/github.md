@@ -60,12 +60,19 @@ workflows; use `search repos` for GitHub's indexed repository search.
 ```bash
 untaped-github repos list --org acme
 untaped-github repos list 'play*' --team acme/backend
+untaped-github repos list 'play*' --org acme --team backend
 untaped-github repos list '^acme/play-[0-9]+$' --org acme --regex
 ```
 
 At least one explicit scope is required. V1 supports repeatable `--org ORG`
-and `--team ORG/SLUG`; it does not list user-owned repositories with a bare
-default or `--user`.
+and `--team ORG/SLUG`; a bare `--team SLUG` is accepted only when exactly
+one `--org` is present, and is normalized to `ORG/SLUG`. It does not list
+user-owned repositories with a bare default or `--user`.
+
+`repos list` treats `--org` and `--team` as additive inventory scopes. Use
+`--team acme/backend` by itself for team-only inventory; `--org acme --team
+backend` lists the whole `acme` org plus the `acme/backend` team, deduped by
+`full_name`.
 
 `PATTERN` is optional and is applied locally after the selected scopes are
 fully paginated. It is a case-insensitive whole-target glob by default;
@@ -87,7 +94,7 @@ Local filters:
 | Flag                       | Effect                                      |
 | -------------------------- | ------------------------------------------- |
 | `--org ORG`                | Include all visible repos in an org.        |
-| `--team ORG/SLUG`          | Include all visible repos for a team.       |
+| `--team ORG/SLUG` or `SLUG` | Include all visible repos for a team. Bare `SLUG` requires exactly one `--org`. |
 | `--archived/--no-archived` | Include or exclude archived repositories.   |
 | `--fork/--no-fork`         | Include or exclude forks.                   |
 | `--regex`                  | Treat `PATTERN` as an unanchored regex.     |
@@ -143,13 +150,15 @@ Common flags for `repos`, `code`, and `issues`:
 | `--org`       | `org:<name>` qualifier; repeatable.                                  |
 | `--repo`      | `repo:owner/name`; repeated values render as an OR scope group.       |
 | `--repo-stdin`| Read `owner/name` repo scopes from stdin and append to `--repo`.      |
-| `--team ORG/SLUG` | Resolves the team's repos into an OR repo scope; repeatable.    |
+| `--team ORG/SLUG` or `SLUG` | Resolves the team's repos into an OR repo scope; bare `SLUG` requires exactly one `--org`. |
 | `--limit N`   | Stop after N rows. Default `30`; GitHub search caps at 1000 rows.    |
 | `--format`    | `table` (default), `json`, `yaml`, `raw`, `pipe`.                    |
 | `--columns`   | Repeatable; dotted paths supported.                                  |
 
-`--team` must be self-contained as `ORG/SLUG`; `--org` remains a search
-qualifier and does not provide the organization for a bare team slug.
+`--team` is self-contained as `ORG/SLUG` unless exactly one `--org` is
+present, in which case a bare team slug is normalized to that org. `--org`
+also remains a search qualifier, so `--org acme --team backend` searches
+within the repos resolved from `acme/backend` under the `org:acme` qualifier.
 
 Repository-specific: `--name`, `--language`, `--archived/--no-archived`,
 `--fork/--no-fork`, `--visibility public|private`, `--sort stars|forks|updated`.

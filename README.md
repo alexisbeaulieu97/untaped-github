@@ -35,7 +35,7 @@ per-profile keys too (e.g. `untaped-github config set http.verify_ssl false`).
 
 ```text
 untaped-github whoami
-untaped-github repos list [PATTERN] --org <org> | --team <org>/<slug>
+untaped-github repos list [PATTERN] [--org ORG]... [--team ORG/SLUG|SLUG]...
 untaped-github search repos [QUERY]
 untaped-github search code [QUERY]
 untaped-github search issues [QUERY]

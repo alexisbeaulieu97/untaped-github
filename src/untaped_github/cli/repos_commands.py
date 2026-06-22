@@ -78,12 +78,12 @@ def list_command(
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
 ) -> None:
-    """List repositories from org/team inventory APIs."""
+    """List repositories from additive org/team inventory scopes."""
     from untaped_github.application import ListRepos, RepoListFilters  # noqa: PLC0415
 
     with report_errors():
         orgs = tuple(org or ())
-        team_scopes = parse_team_scopes(team)
+        team_scopes = parse_team_scopes(team, orgs=orgs)
         _validate_args(pattern, regex=regex, orgs=orgs, team_scopes=team_scopes)
         filters = RepoListFilters(pattern=pattern, regex=regex, archived=archived, fork=fork)
         with open_client() as (client, ui), ui.progress("Listing repositories…"):

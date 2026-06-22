@@ -211,9 +211,15 @@ see "GraphQL Batched Ref Probe" above for cost math.
 `repos list` is a Cyclopts sub-app mounted on the root `github` app for
 complete repository inventory from REST list endpoints, not GitHub search.
 It requires at least one explicit scope: repeatable `--org ORG` and/or
-repeatable `--team ORG/SLUG`. There is intentionally no bare `@me` default
-or `--user` scope in v1; user-owned inventory would require a separate
-`/user/repos` design.
+repeatable `--team ORG/SLUG`. A bare `--team SLUG` is accepted only when
+exactly one `--org` is present and normalizes to `ORG/SLUG`. There is
+intentionally no bare `@me` default or `--user` scope in v1; user-owned
+inventory would require a separate `/user/repos` design.
+
+Inventory scopes are additive. `--team acme/backend` by itself lists only
+that team's repositories; `--org acme --team backend` lists the whole
+`acme` org plus the `acme/backend` team, with duplicate repos deduped by
+`full_name`.
 
 `repos list [PATTERN]` filters locally after fully paginating the selected
 scopes. `PATTERN` is a case-insensitive whole-target glob by default;
@@ -262,9 +268,10 @@ subcommand per GitHub search endpoint:
 
 The three scoped subcommands (`repos`, `code`, `issues`) accept `--user`,
 `--org` (repeatable), `--repo` (repeatable), `--repo-stdin`, and
-`--team ORG/SLUG` (repeatable). `search users` does not; GitHub's user-search endpoint
-ignores those qualifiers, so exposing them would mislead. All search
-commands share `--limit` and the SDK's `--format/-f` + `--columns/-c`.
+`--team ORG/SLUG` (repeatable), or bare `--team SLUG` when exactly one
+`--org` is present. `search users` does not; GitHub's user-search endpoint
+ignores those qualifiers, so exposing them would mislead. All search commands
+share `--limit` and the SDK's `--format/-f` + `--columns/-c`.
 
 Repeated `--repo` scopes render as one parenthesized OR group, e.g.
 `(repo:acme/api OR repo:acme/web)`, because GitHub treats whitespace as
@@ -290,10 +297,10 @@ does not inject anything because GitHub user search ignores those qualifiers.
 
 ### Team-to-repo Resolution
 
-There is no `team:` qualifier in GitHub search. `--team` must be the
-self-contained `ORG/SLUG` form; `--org` remains a search qualifier and
-does not provide the organization for a bare team slug. CLI parsing turns
-team values into `TeamScope(org, slug)` objects, then the use case calls
+There is no `team:` qualifier in GitHub search. `--team` is self-contained
+as `ORG/SLUG` unless exactly one `--org` is present, in which case a bare
+team slug normalizes to that org. CLI parsing turns team values into
+`TeamScope(org, slug)` objects, then the use case calls
 `GET /orgs/{org}/teams/{slug}/repos` and expands the result into the same
 parenthesized OR repo group used by explicit repeated `--repo` flags. The
 use case bounds each team at `MAX_TEAM_REPO_QUALIFIERS + 1` with
