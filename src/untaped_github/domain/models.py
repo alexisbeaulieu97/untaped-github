@@ -40,6 +40,22 @@ class RepoResult(BaseModel):
     updated_at: str | None = None
 
 
+class RepoListResult(BaseModel):
+    """One row from GitHub repository inventory list endpoints."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    full_name: str
+    name: str
+    html_url: str
+    clone_url: str | None = None
+    ssh_url: str | None = None
+    default_branch: str | None = None
+    private: bool = False
+    archived: bool = False
+    fork: bool = False
+
+
 class CodeResult(BaseModel):
     """One row of ``GET /search/code``.
 

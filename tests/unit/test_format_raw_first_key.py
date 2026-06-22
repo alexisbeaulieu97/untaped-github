@@ -12,6 +12,7 @@ from untaped_github.domain.models import (
     CodeResult,
     GithubUser,
     IssueResult,
+    RepoListResult,
     RepoResult,
     UserResult,
 )
@@ -19,6 +20,7 @@ from untaped_github.domain.models import (
 PYDANTIC_ROW_SOURCES: dict[type[BaseModel], str] = {
     GithubUser: "login",
     RepoResult: "full_name",
+    RepoListResult: "full_name",
     IssueResult: "repo",
     UserResult: "id",
     CodeResult: "name",

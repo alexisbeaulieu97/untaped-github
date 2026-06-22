@@ -13,7 +13,6 @@ from typing import Annotated, Literal
 from cyclopts import Parameter, validators
 from untaped.api import (
     ColumnsOption,
-    ConfigError,
     FormatOption,
     create_app,
     echo,
@@ -22,8 +21,8 @@ from untaped.api import (
     report_errors,
 )
 
-from untaped_github.application import TeamScope
 from untaped_github.cli._client import open_client
+from untaped_github.cli._scopes import OrgOption, TeamOption, parse_team_scopes
 
 # Shared across all four search subcommands. GitHub-specific (the
 # 1000-result cap belongs to GitHub, not untaped), so it lives
@@ -44,14 +43,6 @@ UserOption = Annotated[
     str | None,
     Parameter(name="--user", help="user:<login>. Defaults to @me when no other scope is set."),
 ]
-OrgOption = Annotated[
-    list[str] | None,
-    Parameter(name="--org", help="GitHub org scope. Repeatable.", consume_multiple=False),
-]
-TeamOption = Annotated[
-    list[str] | None,
-    Parameter(name="--team", help="Team ORG/SLUG. Repeatable.", consume_multiple=False),
-]
 RepoOption = Annotated[
     list[str] | None,
     Parameter(name="--repo", help="repo:owner/name. Repeatable.", consume_multiple=False),
@@ -69,18 +60,6 @@ app = create_app(
 
 def _stderr_warn(message: str) -> None:
     echo(f"warning: {message}", err=True)
-
-
-def _parse_team_scopes(values: list[str] | None) -> tuple[TeamScope, ...]:
-    """Parse repeatable ``--team`` values into explicit org/slug scopes."""
-    scopes: list[TeamScope] = []
-    for value in values or ():
-        parts = value.split("/")
-        if len(parts) != 2 or not all(parts):
-            raise ConfigError("--team must be ORG/SLUG")
-        org, slug = parts
-        scopes.append(TeamScope(org=org, slug=slug))
-    return tuple(scopes)
 
 
 def _repo_scopes(values: list[str] | None, *, repo_stdin: bool) -> tuple[str, ...]:
@@ -142,7 +121,7 @@ def repos_command(
         )
         with open_client() as (client, ui):
             use_case = SearchRepos(client, client, warn=_stderr_warn)
-            team_scopes = _parse_team_scopes(team)
+            team_scopes = parse_team_scopes(team)
             with ui.progress("Searching repositories…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         rendered = render_rows(
@@ -196,7 +175,7 @@ def code_command(
         )
         with open_client() as (client, ui):
             use_case = SearchCode(client, client, warn=_stderr_warn)
-            team_scopes = _parse_team_scopes(team)
+            team_scopes = parse_team_scopes(team)
             with ui.progress("Searching code…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         rendered = render_rows(
@@ -257,7 +236,7 @@ def issues_command(
         )
         with open_client() as (client, ui):
             use_case = SearchIssues(client, client, warn=_stderr_warn)
-            team_scopes = _parse_team_scopes(team)
+            team_scopes = parse_team_scopes(team)
             with ui.progress("Searching issues and pull requests…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         rendered = render_rows(

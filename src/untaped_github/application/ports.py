@@ -42,3 +42,11 @@ class GithubTeamService(Protocol):
     """Team membership lookup, used by ``--team`` resolution."""
 
     def list_team_repos(self, org: str, team_slug: str) -> Iterator[dict[str, Any]]: ...
+
+
+class GithubRepoListService(Protocol):
+    """Repository inventory endpoints used by ``repos list``."""
+
+    def list_org_repos(self, org: str) -> Iterator[dict[str, Any]]: ...
+
+    def list_team_repos(self, org: str, team_slug: str) -> Iterator[dict[str, Any]]: ...
