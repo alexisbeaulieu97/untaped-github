@@ -7,8 +7,9 @@ workflow, update this file in the same commit.
 ## Mission
 
 `untaped-github` is a standalone CLI built on the `untaped` SDK, invoked as
-`untaped-github`. It provides authenticated user inspection and GitHub REST
-search (`repos`, `code`, `issues`, `users`). The `untaped` SDK owns config
+`untaped-github`. It provides authenticated user inspection, GitHub REST
+search (`repos`, `code`, `issues`, `users`), and complete org/team repository
+inventory. The `untaped` SDK owns config
 loading, output helpers, HTTP/TLS primitives, profile selection, and shared
 errors. Profile selection is built into the SDK and works in any token
 position.
@@ -51,9 +52,9 @@ position.
    stderr via `echo(..., err=True)`.
 10. **Pipe-friendly commands keep stable raw first-key identifiers.** These
     raw first-key contracts are load-bearing: `GithubUser` starts with
-    `login`; repo search rows start with `full_name`; issue search rows
-    start with `repo`; user search rows start with `id`; code search rows
-    start with `name`.
+    `login`; repo search and repo-list rows start with `full_name`; issue
+    search rows start with `repo`; user search rows start with `id`; code
+    search rows start with `name`.
 11. **Human table output honors profile UI settings.** GitHub row commands
     render `--format table` through the active settings-backed
     `ui_context().collection(...)` so per-profile themes and
@@ -205,6 +206,44 @@ Future high-volume features should honor `X-RateLimit-Remaining` and
 GraphQL (`batch_repo_refs`) draws on a separate 5000 points/hour budget;
 see "GraphQL Batched Ref Probe" above for cost math.
 
+## Repository Inventory
+
+`repos list` is a Cyclopts sub-app mounted on the root `github` app for
+complete repository inventory from REST list endpoints, not GitHub search.
+It requires at least one explicit scope: repeatable `--org ORG` and/or
+repeatable `--team ORG/SLUG`. There is intentionally no bare `@me` default
+or `--user` scope in v1; user-owned inventory would require a separate
+`/user/repos` design.
+
+`repos list [PATTERN]` filters locally after fully paginating the selected
+scopes. `PATTERN` is a case-insensitive glob by default; `--regex` treats it
+as a case-insensitive regular expression. A pattern containing `/` matches
+`full_name`; otherwise it matches the repository leaf `name`. The command
+also supports local `--archived/--no-archived` and `--fork/--no-fork`
+filters. After filtering, rows are deduped by `full_name` and sorted
+case-insensitively by `full_name`.
+
+The list endpoints are walked to completion before local filters run. This is
+intentional v1 behavior: correctness and complete inventory win over reducing
+page count. GitHub-side list parameters, caching, and a debugging limit are
+future work.
+
+Repo-list rows use a dedicated `RepoListResult` model so adding inventory
+fields does not change `search repos` output. The first field stays
+`full_name`; common pipe columns include `ssh_url`, `clone_url`,
+`default_branch`, `private`, `archived`, and `fork`.
+
+`repos list --format pipe` is tagged as `kind="github.repo"` for consistency
+with other repo row producers. `untaped-workspace add --stdin` does not
+consume typed pipe records today because it reads bare URL identifiers
+without an `id_field`; the supported workspace pipeline is raw URL lines:
+
+```bash
+untaped-github repos list 'play*' --team acme/backend --no-archived --no-fork \
+  --format raw --columns ssh_url \
+  | untaped-workspace add --stdin --workspace prod
+```
+
 ## Search
 
 `search` is a Cyclopts sub-app mounted on the root `github` app, with one
@@ -293,12 +332,14 @@ Two efficiency/defense rules are load-bearing:
 
 ## Layering
 
-- `domain/`: `GithubUser`, `RepoResult`, `CodeResult`, `IssueResult`,
-  `UserResult`, and frozen filter value objects in `queries.py`. Query
-  objects render GitHub `q=` strings and do no I/O.
+- `domain/`: `GithubUser`, `RepoResult`, `RepoListResult`, `CodeResult`,
+  `IssueResult`, `UserResult`, frozen search filter value objects in
+  `queries.py`, and pure repo inventory pattern helpers in
+  `repo_filters.py`. Query/filter helpers do no I/O.
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
-  `SearchUsers`, and their `Protocol` ports. Scope defaulting and
-  team-to-repo resolution live here.
+  `SearchUsers`, `ListRepos`, and their `Protocol` ports. Scope defaulting,
+  team-to-repo resolution, repo-list enumeration, dedupe, and ordering live
+  here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
   `pagination.py` (REST Link-header mechanics over the SDK's `paginate_pages`),
   and `graphql.py` (batched ref-probe query building and response
@@ -331,8 +372,9 @@ coverage gate.
 4. Add the HTTP method to `infrastructure/github_client.py` and keep
    pagination details in `infrastructure/pagination.py` (REST) or query
    building/response parsing in `infrastructure/graphql.py` (GraphQL).
-5. Wire the Cyclopts command in `cli/commands.py` or `cli/search_commands.py`;
-   keep stdout data-only and expose `--format`/`--columns` for data output.
+5. Wire the Cyclopts command in `cli/commands.py`, `cli/search_commands.py`,
+   or another focused sub-app module; keep stdout data-only and expose
+   `--format`/`--columns` for data output.
 6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.
 7. Run `uv run untaped-github <command> --help` plus the full verification
    commands above.

@@ -5,7 +5,7 @@ description: Use the untaped-github CLI.
 
 # untaped-github
 
-Use this skill when the user wants an agent to operate the `untaped-github` CLI for authenticated GitHub user and search workflows.
+Use this skill when the user wants an agent to operate the `untaped-github` CLI for authenticated GitHub user, repository inventory, and search workflows.
 
 ## Setup
 
@@ -18,21 +18,30 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 ## Command Patterns
 
 - `untaped-github whoami` verifies the authenticated token and returns the current user — a single entity, so it renders as a vertical detail view under `--format table` and a bare JSON object (`{…}`) under `--format json`.
+- `untaped-github repos list [PATTERN] --org ORG --team ORG/SLUG` lists complete org/team repository inventory from GitHub list APIs.
 - `untaped-github search repos` searches repositories.
 - `untaped-github search code` searches code and does not support sort.
 - `untaped-github search issues` searches issues and pull requests.
 - `untaped-github search users` searches users and organizations.
 - Search commands support scoped selectors such as `--user`, repeatable `--org`, repeatable `--repo`, and repeatable `--team ORG/SLUG` where applicable.
 - Always include the owning organization in the `--team` value.
+- `repos list` requires explicit `--org` or `--team` scopes; it does not default to the authenticated user's repositories.
+- In `repos list`, `PATTERN` is a case-insensitive glob by default; `--regex` switches it to a case-insensitive regex. Patterns with `/` match `full_name`, otherwise they match repo `name`.
+- Use `repos list --no-archived --no-fork --format raw --columns ssh_url` to produce cloneable URL lines for `untaped-workspace add --stdin`.
 
 ## Agent Guidance
 
 - Prefer `--format json` for structured search results.
+- Prefer `repos list` over `search repos` when the user needs complete org/team inventory or local glob/regex matching.
 - Use `--format pipe` to chain a search into another untaped tool: each
   record is tagged (`github.repo`/`github.code`/...), and `--repo-stdin` reads a
   `--format pipe` stream back (mapping `full_name`) as well as bare `owner/name`
   lines — e.g. `untaped-github search repos --org acme --format pipe |
   untaped-github search code "BaseModel" --repo-stdin`.
+- For `untaped-workspace add --stdin`, use raw URL lines:
+  `untaped-github repos list 'play*' --team acme/backend --format raw --columns ssh_url |
+  untaped-workspace add --stdin --workspace prod`. `repos list --format pipe`
+  emits `github.repo` records, but workspace add does not consume typed pipe records today.
 - `--profile <name>` works in any token position (e.g. `untaped-github --profile work whoami`).
 - Use `--limit` intentionally; GitHub search has stricter rate limits than normal REST reads.
 - When no repo/org/user/team scope is passed to repo/code/issue search, the CLI defaults to the authenticated user.

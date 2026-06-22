@@ -2,10 +2,11 @@
 
 `untaped-github` is a standalone CLI, built on the
 [`untaped`](https://github.com/alexisbeaulieu97/untaped) SDK, that inspects
-the authenticated user and searches GitHub for repositories, code,
-issues/PRs, and users/orgs. All commands authenticate with the token from
-the tool's `token` setting. Scoped search commands default to the
-authenticated user, so bare scoped searches answer "what's mine?".
+the authenticated user, lists complete org/team repository inventory, and
+searches GitHub for repositories, code, issues/PRs, and users/orgs. All
+commands authenticate with the token from the tool's `token` setting.
+Scoped search commands default to the authenticated user, so bare scoped
+searches answer "what's mine?".
 
 ## Setup
 
@@ -49,6 +50,70 @@ and as a bare JSON object (`{…}`, not a one-element `[{…}]`) under
 ```bash
 echo "[gh:$(untaped-github whoami --format raw --columns login)]"
 ```
+
+### `repos list`
+
+`untaped-github repos list` lists complete repository inventory from GitHub
+org/team list APIs. It is for "which repositories are in these scopes?"
+workflows; use `search repos` for GitHub's indexed repository search.
+
+```bash
+untaped-github repos list --org acme
+untaped-github repos list 'play*' --team acme/backend
+untaped-github repos list '^acme/play-[0-9]+$' --org acme --regex
+```
+
+At least one explicit scope is required. V1 supports repeatable `--org ORG`
+and `--team ORG/SLUG`; it does not list user-owned repositories with a bare
+default or `--user`.
+
+`PATTERN` is optional and is applied locally after the selected scopes are
+fully paginated. It is a case-insensitive glob by default; pass `--regex`
+to use a case-insensitive regular expression. A pattern containing `/`
+matches `full_name` (`owner/name`); otherwise it matches the repository
+leaf `name`.
+
+Examples:
+
+```bash
+untaped-github repos list api-service --org acme --org beta   # match repo name
+untaped-github repos list 'acme/*' --org acme                 # match full_name
+untaped-github repos list '*/api-service' --org acme --org beta
+```
+
+Local filters:
+
+| Flag                       | Effect                                      |
+| -------------------------- | ------------------------------------------- |
+| `--org ORG`                | Include all visible repos in an org.        |
+| `--team ORG/SLUG`          | Include all visible repos for a team.       |
+| `--archived/--no-archived` | Include or exclude archived repositories.   |
+| `--fork/--no-fork`         | Include or exclude forks.                   |
+| `--regex`                  | Treat `PATTERN` as a regex instead of glob. |
+| `--format`                 | `table` (default), `json`, `yaml`, `raw`.   |
+| `--columns`                | Repeatable; dotted paths supported.         |
+
+Rows are deduped by `full_name` and sorted by `full_name`. Use `--columns`
+to select clone URL fields for shell pipelines:
+
+```bash
+untaped-github repos list 'play*' \
+  --team org-a/team-a \
+  --team org-b/team-b \
+  --no-archived \
+  --no-fork \
+  --format raw --columns ssh_url \
+  | untaped-workspace add --stdin --workspace prod
+```
+
+The workspace pipeline above deliberately uses `--format raw`: `repos list
+--format pipe` emits `github.repo` records, but `untaped-workspace add
+--stdin` reads bare URL lines today and does not consume typed pipe records.
+
+`repos list` favors complete inventory over API minimization in v1. Local
+pattern and boolean filters do not reduce GitHub page count; the command
+fetches the selected org/team scopes to exhaustion before filtering. Server
+side list parameters, caching, and a debugging limit are deferred.
 
 ### `search`
 
