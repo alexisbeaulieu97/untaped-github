@@ -106,10 +106,11 @@ def repos_command(
     from untaped_github.domain import RepoSearchFilters  # noqa: PLC0415
 
     with report_errors():
+        orgs = tuple(org or ())
         filters = RepoSearchFilters(
             raw_query=query,
             user=user,
-            orgs=tuple(org or ()),
+            orgs=orgs,
             repos=_repo_scopes(repo, repo_stdin=repo_stdin),
             name=name,
             language=language,
@@ -121,7 +122,7 @@ def repos_command(
         )
         with open_client() as (client, ui):
             use_case = SearchRepos(client, client, warn=_stderr_warn)
-            team_scopes = parse_team_scopes(team)
+            team_scopes = parse_team_scopes(team, orgs=orgs)
             with ui.progress("Searching repositories…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         rendered = render_rows(
@@ -162,10 +163,11 @@ def code_command(
     from untaped_github.domain import CodeSearchFilters  # noqa: PLC0415
 
     with report_errors():
+        orgs = tuple(org or ())
         filters = CodeSearchFilters(
             raw_query=query,
             user=user,
-            orgs=tuple(org or ()),
+            orgs=orgs,
             repos=_repo_scopes(repo, repo_stdin=repo_stdin),
             language=language,
             filename=filename,
@@ -175,7 +177,7 @@ def code_command(
         )
         with open_client() as (client, ui):
             use_case = SearchCode(client, client, warn=_stderr_warn)
-            team_scopes = parse_team_scopes(team)
+            team_scopes = parse_team_scopes(team, orgs=orgs)
             with ui.progress("Searching code…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         rendered = render_rows(
@@ -220,10 +222,11 @@ def issues_command(
     from untaped_github.domain import IssueSearchFilters  # noqa: PLC0415
 
     with report_errors():
+        orgs = tuple(org or ())
         filters = IssueSearchFilters(
             raw_query=query,
             user=user,
-            orgs=tuple(org or ()),
+            orgs=orgs,
             repos=_repo_scopes(repo, repo_stdin=repo_stdin),
             state=state,
             kind=kind,
@@ -236,7 +239,7 @@ def issues_command(
         )
         with open_client() as (client, ui):
             use_case = SearchIssues(client, client, warn=_stderr_warn)
-            team_scopes = parse_team_scopes(team)
+            team_scopes = parse_team_scopes(team, orgs=orgs)
             with ui.progress("Searching issues and pull requests…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
         rendered = render_rows(

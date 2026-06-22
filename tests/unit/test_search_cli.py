@@ -303,28 +303,33 @@ def test_search_code_accepts_repeated_team_scopes(
     assert route.calls[0].request.url.params["q"] == "TODO (repo:acme/api OR repo:platform/deploy)"
 
 
-def test_search_code_rejects_slug_team_with_single_org(
+def test_search_code_expands_bare_team_with_single_org(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
 
-    result = CliInvoker().invoke(
-        app,
-        [
-            "search",
-            "code",
-            "TODO",
-            "--org",
-            "acme",
-            "--team",
-            "backend",
-            "--format",
-            "json",
-        ],
-    )
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=[{"full_name": "acme/api"}])
+        )
+        route = mock.get("/search/code").mock(return_value=httpx.Response(200, json={"items": []}))
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "code",
+                "TODO",
+                "--org",
+                "acme",
+                "--team",
+                "backend",
+                "--format",
+                "json",
+            ],
+        )
 
-    assert result.exit_code != 0
-    assert "ORG/SLUG" in result.output
+    assert result.exit_code == 0, result.output
+    assert route.calls[0].request.url.params["q"] == "TODO org:acme repo:acme/api"
 
 
 def test_search_code_passes_query_and_filters(
@@ -735,6 +740,7 @@ def test_search_repos_help_advertises_default_30(
     # Help output includes the default and documented cap.
     assert "30" in result.output
     assert "1000" in result.output  # cap mentioned in the help string
+    assert "exactly one --org" in result.output
 
 
 def test_search_code_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
