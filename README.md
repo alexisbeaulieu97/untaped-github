@@ -58,3 +58,17 @@ uv run untaped-github --help
 
 See [AGENTS.md](./AGENTS.md) for architecture rules and GitHub-specific
 contracts.
+
+## Security
+
+Please report suspected vulnerabilities privately. See
+[SECURITY.md](./SECURITY.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) and [AGENTS.md](./AGENTS.md) for the
+local workflow, architecture rules, and GitHub-specific contracts.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
