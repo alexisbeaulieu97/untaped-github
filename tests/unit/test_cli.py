@@ -43,6 +43,7 @@ def test_root_package_public_surface_is_slim() -> None:
     assert untaped_github.__all__ == [
         "BatchRepoRefsResult",
         "GithubClient",
+        "GithubGraphqlError",
         "GithubSettings",
         "RepoRef",
         "RepoRefs",

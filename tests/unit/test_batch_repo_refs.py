@@ -11,7 +11,7 @@ import respx
 from pydantic import SecretStr
 from untaped.api import HttpError, UntapedError
 
-from untaped_github import GithubClient, GithubSettings
+from untaped_github import GithubClient, GithubGraphqlError, GithubSettings
 
 
 def _client(base_url: str = "https://api.github.com") -> GithubClient:
@@ -362,7 +362,7 @@ def test_batch_repo_refs_raises_when_repo_lost_during_ref_pagination() -> None:
             client.batch_repo_refs(["acme/site"], kinds=("heads",))
 
 
-def test_batch_repo_refs_raises_on_other_graphql_errors() -> None:
+def test_batch_repo_refs_raises_rate_limited_graphql_error() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.post("/graphql").mock(
             return_value=httpx.Response(
@@ -373,11 +373,29 @@ def test_batch_repo_refs_raises_on_other_graphql_errors() -> None:
                 },
             )
         )
-        with (
-            _client() as client,
-            pytest.raises(UntapedError, match="API rate limit exceeded"),
-        ):
+        with _client() as client, pytest.raises(GithubGraphqlError) as exc_info:
             client.batch_repo_refs(["acme/site"])
+
+    assert exc_info.value.kind == "rate_limited"
+    assert "API rate limit exceeded" in str(exc_info.value)
+
+
+def test_batch_repo_refs_raises_unknown_graphql_error() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": None,
+                    "errors": [{"type": "SOMETHING_ELSE", "message": "GraphQL blew up"}],
+                },
+            )
+        )
+        with _client() as client, pytest.raises(GithubGraphqlError) as exc_info:
+            client.batch_repo_refs(["acme/site"])
+
+    assert exc_info.value.kind == "unknown"
+    assert "GraphQL blew up" in str(exc_info.value)
 
 
 def test_batch_repo_refs_raises_on_null_repo_without_error() -> None:
@@ -475,11 +493,74 @@ def test_batch_repo_refs_does_not_split_single_repo_chunk_on_5xx() -> None:
 
 def test_batch_repo_refs_does_not_retry_4xx() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
-        route = mock.post("/graphql").mock(side_effect=[httpx.Response(401, text="Unauthorized")])
-        with _client() as client, pytest.raises(HttpError):
+        route = mock.post("/graphql").mock(
+            side_effect=[httpx.Response(401, json={"message": "Bad credentials"})]
+        )
+        with _client() as client, pytest.raises(GithubGraphqlError) as exc_info:
             client.batch_repo_refs(["acme/a", "acme/b"])
 
     assert route.call_count == 1
+    assert exc_info.value.kind == "auth"
+    assert "Bad credentials" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("response", "kind", "message"),
+    [
+        (
+            httpx.Response(
+                403,
+                json={"message": "API rate limit exceeded for user ID 123."},
+            ),
+            "rate_limited",
+            "API rate limit exceeded",
+        ),
+        (
+            httpx.Response(
+                403,
+                json={
+                    "message": (
+                        "You have exceeded a secondary rate limit. "
+                        "Please wait a few minutes before you try again."
+                    )
+                },
+            ),
+            "secondary_rate_limited",
+            "secondary rate limit",
+        ),
+        (
+            httpx.Response(
+                429,
+                json={"message": "You have exceeded a secondary rate limit."},
+            ),
+            "secondary_rate_limited",
+            "secondary rate limit",
+        ),
+        (
+            httpx.Response(
+                403,
+                json={"message": "Resource not accessible by personal access token"},
+            ),
+            "forbidden",
+            "Resource not accessible",
+        ),
+    ],
+)
+def test_batch_repo_refs_classifies_graphql_http_access_errors(
+    response: httpx.Response,
+    kind: str,
+    message: str,
+) -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(side_effect=[response])
+        with _client() as client, pytest.raises(GithubGraphqlError) as exc_info:
+            client.batch_repo_refs(["acme/a", "acme/b"])
+
+    assert route.call_count == 1
+    assert exc_info.value.kind == kind
+    assert message in str(exc_info.value)
+    assert exc_info.value.status_code == response.status_code
+    assert exc_info.value.body
 
 
 @pytest.mark.parametrize("bad", ["site", "acme/", "/site", "acme/site/extra", ""])

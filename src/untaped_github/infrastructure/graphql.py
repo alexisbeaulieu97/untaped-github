@@ -10,8 +10,8 @@ isolates REST ``Link``-header mechanics. ``GithubClient`` only wires an
 Each chunk of repositories becomes one POST with aliases ``r0..rN`` that
 map back to input order. Repositories GitHub reports as ``NOT_FOUND`` or
 ``FORBIDDEN`` arrive as a ``null`` data node plus an ``errors`` entry
-with ``path: ["rX"]``; those are collected, not raised. Any other
-GraphQL error raises :class:`untaped.UntapedError`.
+with ``path: ["rX"]``; those are collected, not raised. Global GraphQL
+access failures raise :class:`untaped_github.GithubGraphqlError`.
 
 GraphQL cost: roughly one point per repo per ref connection, against a
 separate 5000 points/hour budget. A full heads+tags probe of 1500 repos
@@ -28,11 +28,13 @@ from typing import Any, NamedTuple, cast
 
 from untaped.api import HttpClient, HttpError, UntapedError
 
+from untaped_github.domain.errors import GithubGraphqlError, GithubGraphqlErrorKind
 from untaped_github.domain.models import BatchRepoRefsResult, RefKind, RepoRef, RepoRefs
 
 _REF_PREFIXES: dict[RefKind, str] = {"heads": "refs/heads/", "tags": "refs/tags/"}
 _PAGE_SIZE = 100
 _MISSING_ERROR_TYPES = frozenset({"NOT_FOUND", "FORBIDDEN"})
+_GRAPHQL_ACCESS_STATUSES = frozenset({401, 403, 429})
 _RATE_LIMIT_FIELD = "rateLimit { cost remaining resetAt }"
 # Annotated tags point at a Tag object instead of a commit; peel via
 # nested ``target { oid }`` two levels deep (covers tags-of-tags).
@@ -141,7 +143,12 @@ def _is_server_error(exc: HttpError) -> bool:
 
 
 def _post(http: HttpClient, endpoint: str, query: str) -> dict[str, Any]:
-    payload = http.post_json(endpoint, json={"query": query})
+    try:
+        payload = http.post_json(endpoint, json={"query": query})
+    except HttpError as exc:
+        if exc.status_code in _GRAPHQL_ACCESS_STATUSES:
+            raise _graphql_http_error(exc) from exc
+        raise
     if not isinstance(payload, dict):
         raise HttpError(
             f"expected JSON object from {endpoint}, got {type(payload).__name__}",
@@ -218,12 +225,125 @@ def _classify_errors(payload: dict[str, Any]) -> set[str]:
     """Return aliases of missing repos; raise on any other GraphQL error."""
     missing: set[str] = set()
     for error in payload.get("errors") or ():
-        path = error.get("path") or []
-        if error.get("type") in _MISSING_ERROR_TYPES and path:
-            missing.add(str(path[0]))
-        else:
-            raise UntapedError(f"github graphql error: {error.get('message', error)}")
+        if not isinstance(error, dict):
+            raise _graphql_payload_error(error)
+        alias = _repo_alias_from_path(error.get("path"))
+        if error.get("type") in _MISSING_ERROR_TYPES and alias is not None:
+            missing.add(alias)
+            continue
+        raise _graphql_payload_error(error)
     return missing
+
+
+def _repo_alias_from_path(path: object) -> str | None:
+    if not isinstance(path, list | tuple) or not path:
+        return None
+    alias = path[0]
+    if isinstance(alias, str) and alias.startswith("r") and alias[1:].isdigit():
+        return alias
+    return None
+
+
+def _graphql_http_error(exc: HttpError) -> GithubGraphqlError:
+    detail = _message_from_body(exc.body)
+    kind = _classify_graphql_failure(status_code=exc.status_code, message=detail)
+    return _github_graphql_error(
+        kind,
+        detail,
+        status_code=exc.status_code,
+        url=exc.url,
+        body=exc.body,
+    )
+
+
+def _graphql_payload_error(error: object) -> GithubGraphqlError:
+    if isinstance(error, dict):
+        detail = _message_from_graphql_error(error)
+        error_type = error.get("type")
+        kind = _classify_graphql_failure(
+            status_code=None,
+            message=detail,
+            error_type=str(error_type) if error_type is not None else None,
+        )
+    else:
+        detail = repr(error)
+        kind = "unknown"
+    return _github_graphql_error(kind, detail)
+
+
+def _message_from_graphql_error(error: dict[str, Any]) -> str | None:
+    message = error.get("message")
+    if isinstance(message, str) and message.strip():
+        return message
+    return repr(error)
+
+
+def _message_from_body(body: str | None) -> str | None:
+    if body is None:
+        return None
+    stripped = body.strip()
+    if not stripped:
+        return None
+    try:
+        decoded = json.loads(stripped)
+    except ValueError:
+        return stripped
+    if isinstance(decoded, dict):
+        message = decoded.get("message")
+        if isinstance(message, str) and message.strip():
+            return message
+    return stripped
+
+
+def _classify_graphql_failure(
+    *,
+    status_code: int | None,
+    message: str | None,
+    error_type: str | None = None,
+) -> GithubGraphqlErrorKind:
+    haystack = f"{message or ''} {error_type or ''}".lower()
+    if status_code == 401 or "bad credentials" in haystack or "requires authentication" in haystack:
+        return "auth"
+    if "secondary rate limit" in haystack or "abuse detection" in haystack:
+        return "secondary_rate_limited"
+    if (
+        error_type == "RATE_LIMITED"
+        or status_code == 429
+        or "rate limit exceeded" in haystack
+        or "api rate limit" in haystack
+    ):
+        return "rate_limited"
+    if status_code == 403 or error_type == "FORBIDDEN" or "resource not accessible" in haystack:
+        return "forbidden"
+    return "unknown"
+
+
+def _github_graphql_error(
+    kind: GithubGraphqlErrorKind,
+    detail: str | None,
+    *,
+    status_code: int | None = None,
+    url: str | None = None,
+    body: str | None = None,
+) -> GithubGraphqlError:
+    prefixes = {
+        "rate_limited": "github graphql rate limit exceeded",
+        "secondary_rate_limited": "github graphql secondary rate limit exceeded",
+        "auth": "github graphql authentication failed",
+        "forbidden": "github graphql access forbidden",
+        "unknown": "github graphql error",
+    }
+    fallback = f"HTTP {status_code}" if status_code is not None else "unknown failure"
+    if url and status_code is not None:
+        fallback = f"{fallback} for {url}"
+    message = f"{prefixes[kind]}: {detail or fallback}"
+    return GithubGraphqlError(
+        message,
+        kind=kind,
+        status_code=status_code,
+        url=url,
+        body=body,
+    )
 
 
 def _resolve_repo(
