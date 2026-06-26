@@ -81,6 +81,10 @@ def _is_query_for(request: httpx.Request, repo: str) -> bool:
     return f'name: "{repo}"' in query
 
 
+def _raise_transport_failure(request: httpx.Request) -> None:
+    raise httpx.ConnectError("connect failed", request=request)
+
+
 def test_batch_repo_refs_returns_refs_default_branch_and_rate_limit() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.post("/graphql").mock(
@@ -333,7 +337,7 @@ def test_batch_default_branch_refs_adaptively_isolates_payload_specific_5xxs() -
     assert all("refs(" not in _query(route, index) for index in range(route.call_count))
 
 
-def test_batch_default_branch_refs_full_outage_reports_original_chunk_without_deep_split() -> None:
+def test_batch_default_branch_refs_full_outage_reports_original_chunk_with_bounded_split() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.post("/graphql").mock(return_value=httpx.Response(502, text="Bad Gateway"))
         with _client() as client:
@@ -341,7 +345,7 @@ def test_batch_default_branch_refs_full_outage_reports_original_chunk_without_de
                 ["acme/a", "acme/b", "acme/c", "acme/d"], chunk_size=4
             )
 
-    assert route.call_count == 9
+    assert route.call_count == 21
     assert result.repos == ()
     assert [failure.full_name for failure in result.failures] == [
         "acme/a",
@@ -443,6 +447,48 @@ def test_batch_repo_refs_follows_ref_pagination_cursor() -> None:
     (site,) = result.repos
     assert [(ref.name, ref.sha) for ref in site.refs] == [("main", "c1"), ("dev", "c2")]
     assert result.rate_limit_remaining == 4989
+
+
+def test_batch_repo_refs_reports_transient_ref_pagination_failure_per_repo() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {
+                            "r0": _repo_node(
+                                "acme/paged",
+                                heads=_connection(
+                                    [_ref_node("main", {"oid": "c1"})],
+                                    has_next=True,
+                                    end_cursor="CUR",
+                                ),
+                                tags=_connection([]),
+                            ),
+                            "r1": _repo_node(
+                                "acme/ok",
+                                heads=_connection([_ref_node("main", {"oid": "ok"})]),
+                                tags=_connection([]),
+                            ),
+                        }
+                    ),
+                ),
+                httpx.Response(502, text="Bad Gateway"),
+                httpx.Response(502, text="Bad Gateway"),
+                httpx.Response(502, text="Bad Gateway"),
+            ]
+        )
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/paged", "acme/ok"], kinds=("heads",))
+
+    assert route.call_count == 4
+    assert all('after: "CUR"' in _query(route, call) for call in (1, 2, 3))
+    assert [repo.full_name for repo in result.repos] == ["acme/ok"]
+    assert [(repo.refs[0].name, repo.refs[0].sha) for repo in result.repos] == [("main", "ok")]
+    assert [
+        (failure.full_name, failure.kind, failure.status_code) for failure in result.failures
+    ] == [("acme/paged", "server_error", 502)]
 
 
 def test_batch_repo_refs_collects_not_found_repos_into_missing() -> None:
@@ -745,13 +791,83 @@ def test_batch_repo_refs_adaptively_isolates_payload_specific_5xxs() -> None:
     ] == [("acme/bad", "server_error", 502)]
 
 
-def test_batch_repo_refs_full_outage_reports_original_chunk_without_deep_split() -> None:
+def test_batch_repo_refs_isolates_multiple_bad_repos_in_different_halves() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_query_for(request, "bad0") or _is_query_for(request, "bad3"):
+            return httpx.Response(502, text="Bad Gateway")
+        repo = "acme/ok1" if _is_query_for(request, "ok1") else "acme/ok2"
+        return httpx.Response(
+            200,
+            json=_payload({"r0": _repo_node(repo, heads=_connection([]), tags=_connection([]))}),
+        )
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(side_effect=handler)
+        with _client() as client:
+            result = client.batch_repo_refs(
+                ["acme/bad0", "acme/ok1", "acme/ok2", "acme/bad3"], chunk_size=4
+            )
+
+    assert [repo.full_name for repo in result.repos] == ["acme/ok1", "acme/ok2"]
+    assert [failure.full_name for failure in result.failures] == ["acme/bad0", "acme/bad3"]
+
+
+def test_batch_repo_refs_applies_no_progress_lookahead_recursively() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_query_for(request, "bad4") or _is_query_for(request, "bad7"):
+            return httpx.Response(502, text="Bad Gateway")
+        for index in range(7):
+            if _is_query_for(request, f"ok{index}"):
+                return httpx.Response(
+                    200,
+                    json=_payload(
+                        {
+                            f"r{alias}": _repo_node(
+                                f"acme/ok{index + alias}",
+                                heads=_connection([]),
+                                tags=_connection([]),
+                            )
+                            for alias in range(4)
+                            if _is_query_for(request, f"ok{index + alias}")
+                        }
+                    ),
+                )
+        raise AssertionError("expected at least one ok repo in successful query")
+
+    repos = [
+        "acme/ok0",
+        "acme/ok1",
+        "acme/ok2",
+        "acme/ok3",
+        "acme/bad4",
+        "acme/ok5",
+        "acme/ok6",
+        "acme/bad7",
+    ]
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(side_effect=handler)
+        with _client() as client:
+            result = client.batch_repo_refs(repos, chunk_size=8)
+
+    assert [repo.full_name for repo in result.repos] == [
+        "acme/ok0",
+        "acme/ok1",
+        "acme/ok2",
+        "acme/ok3",
+        "acme/ok5",
+        "acme/ok6",
+    ]
+    assert [failure.full_name for failure in result.failures] == ["acme/bad4", "acme/bad7"]
+
+
+def test_batch_repo_refs_full_outage_reports_original_chunk_with_bounded_split() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.post("/graphql").mock(return_value=httpx.Response(502, text="Bad Gateway"))
         with _client() as client:
             result = client.batch_repo_refs(["acme/a", "acme/b", "acme/c", "acme/d"], chunk_size=4)
 
-    assert route.call_count == 9
+    assert route.call_count == 21
     assert result.repos == ()
     assert [failure.full_name for failure in result.failures] == [
         "acme/a",
@@ -778,6 +894,64 @@ def test_batch_repo_refs_single_repo_5xx_becomes_transient_failure() -> None:
             url="https://api.github.com/graphql",
         ),
     )
+
+
+def test_batch_repo_refs_retries_transport_error_same_chunk_before_splitting() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            _raise_transport_failure(request)
+        return httpx.Response(
+            200,
+            json=_payload(
+                {
+                    "r0": _repo_node("acme/a", heads=_connection([]), tags=_connection([])),
+                    "r1": _repo_node("acme/b", heads=_connection([]), tags=_connection([])),
+                }
+            ),
+        )
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(side_effect=handler)
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/a", "acme/b"])
+
+    assert route.call_count == 2
+    assert [repo.full_name for repo in result.repos] == ["acme/a", "acme/b"]
+    assert result.failures == ()
+
+
+def test_batch_repo_refs_single_repo_transport_error_becomes_transient_failure() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(side_effect=_raise_transport_failure)
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/a"])
+
+    assert route.call_count == 3
+    assert result.repos == ()
+    assert [
+        (failure.full_name, failure.kind, failure.status_code) for failure in result.failures
+    ] == [("acme/a", "transport", None)]
+    assert "connect failed" in result.failures[0].reason
+
+
+def test_batch_repo_refs_transport_outage_stops_at_request_bound() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(side_effect=_raise_transport_failure)
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/a", "acme/b", "acme/c", "acme/d"], chunk_size=4)
+
+    assert route.call_count == 21
+    assert result.repos == ()
+    assert [failure.kind for failure in result.failures] == [
+        "transport",
+        "transport",
+        "transport",
+        "transport",
+    ]
 
 
 def test_batch_repo_refs_does_not_retry_4xx() -> None:
