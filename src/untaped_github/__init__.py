@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from untaped_github.domain.errors import GithubGraphqlError
 from untaped_github.domain.models import BatchRepoRefsResult, RepoRef, RepoRefs
 from untaped_github.infrastructure import GithubClient
 from untaped_github.settings import GithubSettings
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BatchRepoRefsResult",
     "GithubClient",
+    "GithubGraphqlError",
     "GithubSettings",
     "RepoRef",
     "RepoRefs",

@@ -140,10 +140,10 @@ the SDK's `HttpSettings`.
 
 ## Public Client API
 
-`untaped_github` intentionally re-exports `GithubClient` and
-`GithubSettings` for sibling untaped tools that need GitHub access, plus the
-`batch_repo_refs` result models (`BatchRepoRefsResult`, `RepoRefs`,
-`RepoRef`). Keep this surface small and tested. Library consumers
+`untaped_github` intentionally re-exports `GithubClient`,
+`GithubSettings`, and `GithubGraphqlError` for sibling untaped tools that
+need GitHub access, plus the `batch_repo_refs` result models
+(`BatchRepoRefsResult`, `RepoRefs`, `RepoRef`). Keep this surface small and tested. Library consumers
 may use repository metadata, org/team repository listing, matching refs,
 batched ref probing, tree reads, and raw content reads. Add missing
 GitHub operations here rather than duplicating a GitHub client in
@@ -176,8 +176,18 @@ behaviors:
   per-repo point cost.
 - **Missing repos don't raise.** A `null` data node plus a `NOT_FOUND`
   or `FORBIDDEN` error with `path: ["rX"]` lands the input full name in
-  `BatchRepoRefsResult.missing`; any other GraphQL error raises
-  `UntapedError`.
+  `BatchRepoRefsResult.missing`.
+- **Global GraphQL access failures raise `GithubGraphqlError`.** HTTP
+  `401`, `403`, and `429` responses from `/graphql`, plus unscoped
+  GraphQL errors such as `RATE_LIMITED`, are classified as
+  `kind="auth"`, `"forbidden"`, `"rate_limited"`,
+  `"secondary_rate_limited"`, or `"unknown"`. The exception subclasses
+  the SDK's `UntapedError`, carries the status/url/body snippet when
+  available, and its string is user-ready for SDK CLI error reporting.
+  Known limitation: if GitHub returns `200 OK` with per-alias
+  `FORBIDDEN` for every repo, v1 still reports those repos as
+  missing/inaccessible rather than inferring a global SSO or token-scope
+  failure.
 - **Ref-pagination overflow** (>100 refs in a namespace) is followed
   serially with single-repo `after: <cursor>` queries until exhausted.
 - **5xx split-retry.** GitHub intermittently 502s on large aliased
