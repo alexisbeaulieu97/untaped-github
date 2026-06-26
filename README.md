@@ -45,6 +45,16 @@ untaped-github config|profile|skills ...
 
 See [docs/github.md](./docs/github.md) for command details and examples.
 
+## Public Client API
+
+Sibling untaped tools may import `GithubClient`, `GithubSettings`,
+`GithubGraphqlError`, repository inventory helpers such as
+`ResolveRepositoryInventory`, and the batched ref-probe result models from
+`untaped_github`. `GithubClient.batch_repo_refs(...)` probes branch/tag refs;
+`GithubClient.batch_default_branch_refs(...)` probes only default branches with
+a connection-free GraphQL query. Both return `BatchRepoRefsResult`, including
+GraphQL cost, remaining, and reset metadata.
+
 ## Development
 
 ```bash

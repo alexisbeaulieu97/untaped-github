@@ -32,8 +32,9 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 
 ## Client API Notes
 
-- `untaped_github` exports `GithubClient`, `GithubSettings`, `GithubGraphqlError`, and the `batch_repo_refs` result models for sibling untaped tools.
-- `GithubClient.batch_repo_refs(...)` treats exact path-scoped GraphQL `NOT_FOUND`/`FORBIDDEN` errors (`path: ["rX"]`) as per-repo missing results. Nested paths raise `GithubGraphqlError`. Global `/graphql` access failures such as HTTP `401`/`403`/`429` or unscoped `RATE_LIMITED` raise `GithubGraphqlError`, which subclasses `UntapedError` and has a user-ready message.
+- `untaped_github` exports `GithubClient`, `GithubSettings`, `GithubGraphqlError`, the ref-probe result models, and the public repository inventory helpers (`RepositoryInventoryScope`, `RepositoryInventoryItem`, `ResolveRepositoryInventory`, `TeamScope`, `normalize_team_scopes`) for sibling untaped tools.
+- `GithubClient.batch_repo_refs(...)` treats exact path-scoped GraphQL `NOT_FOUND`/`FORBIDDEN` errors (`path: ["rX"]`) as per-repo missing results. Nested paths raise `GithubGraphqlError`. Global `/graphql` access failures such as HTTP `401`/`403`/`429` or unscoped `RATE_LIMITED` raise `GithubGraphqlError`, which subclasses `UntapedError` and has a user-ready message. `BatchRepoRefsResult.rate_limit_cost` sums GraphQL `rateLimit.cost` across every POST in the operation; `rate_limit_remaining` and `rate_limit_reset_at` come from the latest response.
+- `GithubClient.batch_default_branch_refs(...)` probes only `defaultBranchRef { name target { oid } }` with no `refs(...)` connection and returns the same `BatchRepoRefsResult` shape with one synthesized `heads` ref per repo when a default branch exists.
 - Known limitation: a `200 OK` response containing per-alias `FORBIDDEN` for every repo is still reported as per-repo missing/inaccessible rather than inferred as a global SSO or token-scope failure.
 
 ## Agent Guidance

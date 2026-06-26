@@ -50,3 +50,9 @@ class GithubRepoListService(Protocol):
     def list_org_repos(self, org: str) -> Iterator[dict[str, Any]]: ...
 
     def list_team_repos(self, org: str, team_slug: str) -> Iterator[dict[str, Any]]: ...
+
+
+class GithubRepositoryInventoryService(GithubRepoListService, Protocol):
+    """Repository metadata endpoints used by reusable inventory expansion."""
+
+    def get_repository(self, owner: str, repo: str) -> dict[str, Any]: ...

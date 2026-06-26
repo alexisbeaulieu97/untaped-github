@@ -5,7 +5,17 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any, cast
 
-from untaped_github.application import GithubRepoListService, ListRepos, RepoListFilters, TeamScope
+import pytest
+
+from untaped_github.application import (
+    GithubRepoListService,
+    ListRepos,
+    RepoListFilters,
+    RepositoryInventoryScope,
+    ResolveRepositoryInventory,
+    TeamScope,
+    normalize_team_scopes,
+)
 
 
 class _StubRepoLists:
@@ -27,6 +37,11 @@ class _StubRepoLists:
         self.calls.append(("team", org, team_slug))
         return iter(self._teams.get((org, team_slug), []))
 
+    def get_repository(self, owner: str, repo: str) -> dict[str, Any]:
+        full_name = f"{owner}/{repo}"
+        self.calls.append(("repo", owner, repo))
+        return _repo(full_name, default_branch="trunk")
+
 
 def _service(stub: _StubRepoLists) -> GithubRepoListService:
     return cast(GithubRepoListService, stub)
@@ -35,6 +50,7 @@ def _service(stub: _StubRepoLists) -> GithubRepoListService:
 def _repo(
     full_name: str,
     *,
+    default_branch: str = "main",
     archived: bool = False,
     fork: bool = False,
     name: str | None = None,
@@ -47,7 +63,7 @@ def _repo(
         "html_url": f"https://github.com/{full_name}",
         "clone_url": f"https://github.com/{full_name}.git",
         "ssh_url": ssh_url or f"git@github.com:{full_name}.git",
-        "default_branch": "main",
+        "default_branch": default_branch,
         "private": True,
         "archived": archived,
         "fork": fork,
@@ -110,3 +126,51 @@ def test_list_repos_regex_matches_selected_target_case_insensitively() -> None:
     rows = list(use_case(RepoListFilters(pattern=r"^acme/play-\d+$", regex=True), orgs=("acme",)))
 
     assert [row.full_name for row in rows] == ["acme/Play-1"]
+
+
+def test_resolve_repository_inventory_expands_dedupes_sorts_and_prefers_explicit_repos() -> None:
+    stub = _StubRepoLists(
+        orgs={
+            "acme": [
+                _repo("acme/zeta", default_branch="main"),
+                _repo("acme/site", default_branch="main"),
+            ]
+        },
+        teams={
+            ("acme", "platform"): [
+                _repo("acme/site", default_branch="release"),
+                _repo("acme/api", default_branch="main"),
+            ]
+        },
+    )
+    use_case = ResolveRepositoryInventory(_service(stub))
+
+    rows = list(
+        use_case(
+            RepositoryInventoryScope(
+                orgs=("acme",),
+                teams=(TeamScope("acme", "platform"),),
+                repos=("acme/site",),
+            )
+        )
+    )
+
+    assert stub.calls == [
+        ("repo", "acme", "site"),
+        ("org", "acme", None),
+        ("team", "acme", "platform"),
+    ]
+    assert [row.full_name for row in rows] == ["acme/api", "acme/site", "acme/zeta"]
+    assert rows[1].default_branch == "trunk"
+
+
+def test_normalize_team_scopes_accepts_qualified_and_single_org_bare_teams() -> None:
+    assert normalize_team_scopes(["backend", "platform/ops"], orgs=("acme",)) == (
+        TeamScope("acme", "backend"),
+        TeamScope("platform", "ops"),
+    )
+
+
+def test_normalize_team_scopes_rejects_ambiguous_bare_team() -> None:
+    with pytest.raises(ValueError, match="ORG/SLUG"):
+        normalize_team_scopes(["backend"], orgs=("acme", "platform"))

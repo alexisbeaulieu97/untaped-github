@@ -7,7 +7,7 @@ from typing import Annotated
 from cyclopts import Parameter
 from untaped.api import ConfigError
 
-from untaped_github.application.scopes import TeamScope
+from untaped_github.application.scopes import TeamScope, normalize_team_scopes
 
 OrgOption = Annotated[
     list[str] | None,
@@ -27,15 +27,7 @@ def parse_team_scopes(
     values: list[str] | None, *, orgs: tuple[str, ...] = ()
 ) -> tuple[TeamScope, ...]:
     """Parse repeatable ``--team`` values into explicit org/slug scopes."""
-    scopes: list[TeamScope] = []
-    for value in values or ():
-        parts = value.split("/")
-        if len(parts) == 2 and all(parts):
-            org, slug = parts
-        elif "/" not in value and value and len(orgs) == 1:
-            org = orgs[0]
-            slug = value
-        else:
-            raise ConfigError("--team must be ORG/SLUG unless exactly one --org is provided")
-        scopes.append(TeamScope(org=org, slug=slug))
-    return tuple(scopes)
+    try:
+        return normalize_team_scopes(values, orgs=orgs)
+    except ValueError as exc:
+        raise ConfigError("--team must be ORG/SLUG unless exactly one --org is provided") from exc

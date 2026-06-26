@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
-from untaped_github.application.ports import GithubRepoListService
+from untaped_github.application.inventory import (
+    RepositoryInventoryScope,
+    ResolveRepositoryInventory,
+)
+from untaped_github.application.ports import GithubRepositoryInventoryService
 from untaped_github.application.scopes import TeamScope
 from untaped_github.domain import RepoListResult
 from untaped_github.domain.repo_filters import compile_repo_pattern
@@ -24,7 +28,7 @@ class RepoListFilters:
 class ListRepos:
     """List repository inventory from org/team scopes."""
 
-    def __init__(self, repos: GithubRepoListService) -> None:
+    def __init__(self, repos: GithubRepositoryInventoryService) -> None:
         self._repos = repos
 
     def __call__(
@@ -34,25 +38,16 @@ class ListRepos:
         orgs: tuple[str, ...] = (),
         team_scopes: tuple[TeamScope, ...] = (),
     ) -> Iterator[RepoListResult]:
-        rows = _collect_repos(self._repos, orgs=orgs, team_scopes=team_scopes)
+        rows = (
+            RepoListResult.model_validate(row.model_dump())
+            for row in ResolveRepositoryInventory(self._repos)(
+                RepositoryInventoryScope(orgs=orgs, teams=team_scopes)
+            )
+        )
         matcher = _compile_matcher(filters)
         filtered = (row for row in rows if _matches(row, filters=filters, matcher=matcher))
         deduped = {row.full_name: row for row in filtered}
         yield from sorted(deduped.values(), key=lambda row: row.full_name.casefold())
-
-
-def _collect_repos(
-    service: GithubRepoListService,
-    *,
-    orgs: tuple[str, ...],
-    team_scopes: tuple[TeamScope, ...],
-) -> Iterator[RepoListResult]:
-    for org in orgs:
-        for row in service.list_org_repos(org):
-            yield RepoListResult.model_validate(row)
-    for scope in team_scopes:
-        for row in service.list_team_repos(scope.org, scope.slug):
-            yield RepoListResult.model_validate(row)
 
 
 def _matches(

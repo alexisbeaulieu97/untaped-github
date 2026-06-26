@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from itertools import batched
 from typing import Any, NamedTuple, cast
 
@@ -45,6 +46,12 @@ class _RepoTarget(NamedTuple):
     full_name: str
     owner: str
     name: str
+
+
+class _RateLimit(NamedTuple):
+    cost: int | None = None
+    remaining: int | None = None
+    reset_at: datetime | None = None
 
 
 def graphql_endpoint(base_url: str) -> str:
@@ -77,18 +84,50 @@ def fetch_repo_refs(
     targets = [_parse_repo_target(repo) for repo in repos]
     collected: list[RepoRefs] = []
     missing: list[str] = []
-    remaining: int | None = None
+    rate_limit = _RateLimit()
     for chunk in batched(targets, chunk_size, strict=False):
         for subchunk, payload in _execute_chunk(http, endpoint, chunk, ref_kinds):
-            found, gone, chunk_remaining = _resolve_chunk(
+            found, gone, chunk_rate_limit = _resolve_chunk(
                 http, endpoint, subchunk, ref_kinds, payload
             )
             collected.extend(found)
             missing.extend(gone)
-            if chunk_remaining is not None:
-                remaining = chunk_remaining
+            rate_limit = _merge_rate_limit(rate_limit, chunk_rate_limit)
     return BatchRepoRefsResult(
-        repos=tuple(collected), missing=tuple(missing), rate_limit_remaining=remaining
+        repos=tuple(collected),
+        missing=tuple(missing),
+        rate_limit_cost=rate_limit.cost,
+        rate_limit_remaining=rate_limit.remaining,
+        rate_limit_reset_at=rate_limit.reset_at,
+    )
+
+
+def fetch_default_branch_refs(
+    http: HttpClient,
+    endpoint: str,
+    repos: Sequence[str],
+    *,
+    chunk_size: int = 200,
+) -> BatchRepoRefsResult:
+    """Probe only default-branch heads for ``repos`` without ref connections."""
+    if chunk_size < 1:
+        raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    targets = [_parse_repo_target(repo) for repo in repos]
+    collected: list[RepoRefs] = []
+    missing: list[str] = []
+    rate_limit = _RateLimit()
+    for chunk in batched(targets, chunk_size, strict=False):
+        payload = _post(http, endpoint, _build_default_branch_query(chunk))
+        found, gone, chunk_rate_limit = _resolve_default_branch_chunk(chunk, payload)
+        collected.extend(found)
+        missing.extend(gone)
+        rate_limit = _merge_rate_limit(rate_limit, chunk_rate_limit)
+    return BatchRepoRefsResult(
+        repos=tuple(collected),
+        missing=tuple(missing),
+        rate_limit_cost=rate_limit.cost,
+        rate_limit_remaining=rate_limit.remaining,
+        rate_limit_reset_at=rate_limit.reset_at,
     )
 
 
@@ -164,6 +203,18 @@ def _build_batch_query(chunk: tuple[_RepoTarget, ...], kinds: tuple[RefKind, ...
     return f"{{ {fields} {_RATE_LIMIT_FIELD} }}"
 
 
+def _build_default_branch_query(chunk: tuple[_RepoTarget, ...]) -> str:
+    fields = " ".join(
+        (
+            f"r{index}: repository(owner: {json.dumps(target.owner)}, "
+            f"name: {json.dumps(target.name)}) "
+            f"{{ nameWithOwner defaultBranchRef {{ name target {{ oid }} }} }}"
+        )
+        for index, target in enumerate(chunk)
+    )
+    return f"{{ {fields} {_RATE_LIMIT_FIELD} }}"
+
+
 def _repository_field(alias: str, target: _RepoTarget, kinds: tuple[RefKind, ...]) -> str:
     refs = " ".join(_refs_field(kind) for kind in kinds)
     return (
@@ -196,13 +247,13 @@ def _resolve_chunk(
     chunk: tuple[_RepoTarget, ...],
     kinds: tuple[RefKind, ...],
     payload: dict[str, Any],
-) -> tuple[list[RepoRefs], list[str], int | None]:
+) -> tuple[list[RepoRefs], list[str], _RateLimit]:
     """Parse one chunk payload; issues follow-up POSTs for ref pagination."""
     missing_aliases = _classify_errors(payload)
     data = payload.get("data") or {}
     found: list[RepoRefs] = []
     missing: list[str] = []
-    remaining = _rate_limit_remaining(payload)
+    rate_limit = _rate_limit(payload)
     for index, target in enumerate(chunk):
         alias = f"r{index}"
         node = data.get(alias)
@@ -214,11 +265,35 @@ def _resolve_chunk(
                 )
             missing.append(target.full_name)
             continue
-        repo_refs, page_remaining = _resolve_repo(http, endpoint, target, node, kinds)
-        if page_remaining is not None:
-            remaining = page_remaining
+        repo_refs, page_rate_limit = _resolve_repo(http, endpoint, target, node, kinds)
+        rate_limit = _merge_rate_limit(rate_limit, page_rate_limit)
         found.append(repo_refs)
-    return found, missing, remaining
+    return found, missing, rate_limit
+
+
+def _resolve_default_branch_chunk(
+    chunk: tuple[_RepoTarget, ...],
+    payload: dict[str, Any],
+) -> tuple[list[RepoRefs], list[str], _RateLimit]:
+    """Parse one connection-free default-branch payload."""
+    missing_aliases = _classify_errors(payload)
+    data = payload.get("data") or {}
+    found: list[RepoRefs] = []
+    missing: list[str] = []
+    rate_limit = _rate_limit(payload)
+    for index, target in enumerate(chunk):
+        alias = f"r{index}"
+        node = data.get(alias)
+        if node is None:
+            if alias not in missing_aliases:
+                raise UntapedError(
+                    f"github graphql returned null for {target.full_name} "
+                    "without an explanatory error"
+                )
+            missing.append(target.full_name)
+            continue
+        found.append(_resolve_default_branch_repo(target, node))
+    return found, missing, rate_limit
 
 
 def _classify_errors(payload: dict[str, Any]) -> set[str]:
@@ -360,13 +435,13 @@ def _resolve_repo(
     target: _RepoTarget,
     node: dict[str, Any],
     kinds: tuple[RefKind, ...],
-) -> tuple[RepoRefs, int | None]:
+) -> tuple[RepoRefs, _RateLimit]:
     """Build one :class:`RepoRefs`, following ref-pagination cursors.
 
     Repos with >100 refs in a namespace are rare; follow-up single-repo
     queries run serially with ``after: <cursor>`` until exhausted.
     """
-    remaining: int | None = None
+    rate_limit = _RateLimit()
     refs: list[RepoRef] = []
     for kind in kinds:
         connection = node[kind]
@@ -382,16 +457,29 @@ def _resolve_repo(
                 raise UntapedError(
                     f"github graphql lost access to {target.full_name} during ref pagination"
                 )
-            page_remaining = _rate_limit_remaining(payload)
-            if page_remaining is not None:
-                remaining = page_remaining
+            rate_limit = _merge_rate_limit(rate_limit, _rate_limit(payload))
             connection = payload["data"]["r0"][kind]
     default_branch_ref = node.get("defaultBranchRef")
     default_branch = default_branch_ref["name"] if isinstance(default_branch_ref, dict) else None
     return (
         RepoRefs(full_name=target.full_name, default_branch=default_branch, refs=tuple(refs)),
-        remaining,
+        rate_limit,
     )
+
+
+def _resolve_default_branch_repo(target: _RepoTarget, node: dict[str, Any]) -> RepoRefs:
+    default_branch_ref = node.get("defaultBranchRef")
+    if not isinstance(default_branch_ref, dict):
+        return RepoRefs(full_name=target.full_name, default_branch=None, refs=())
+    name = default_branch_ref.get("name")
+    branch_name = name if isinstance(name, str) and name else None
+    target_node = default_branch_ref.get("target")
+    refs = (
+        (RepoRef(kind="heads", name=branch_name, sha=_peel_oid(target_node)),)
+        if branch_name is not None and isinstance(target_node, dict)
+        else ()
+    )
+    return RepoRefs(full_name=target.full_name, default_branch=branch_name, refs=refs)
 
 
 def _parse_ref_nodes(kind: RefKind, nodes: list[dict[str, Any]]) -> list[RepoRef]:
@@ -415,12 +503,43 @@ def _peel_oid(target: dict[str, Any]) -> str:
     return str(oid)
 
 
-def _rate_limit_remaining(payload: dict[str, Any]) -> int | None:
+def _rate_limit(payload: dict[str, Any]) -> _RateLimit:
     data = payload.get("data")
     if not isinstance(data, dict):
-        return None
+        return _RateLimit()
     rate_limit = data.get("rateLimit")
     if not isinstance(rate_limit, dict):
-        return None
+        return _RateLimit()
+    cost = rate_limit.get("cost")
     remaining = rate_limit.get("remaining")
-    return remaining if isinstance(remaining, int) else None
+    reset_at = _parse_reset_at(rate_limit.get("resetAt"))
+    return _RateLimit(
+        cost=cost if isinstance(cost, int) else None,
+        remaining=remaining if isinstance(remaining, int) else None,
+        reset_at=reset_at,
+    )
+
+
+def _parse_reset_at(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _merge_rate_limit(current: _RateLimit, latest: _RateLimit) -> _RateLimit:
+    return _RateLimit(
+        cost=_sum_optional_ints(current.cost, latest.cost),
+        remaining=latest.remaining if latest.remaining is not None else current.remaining,
+        reset_at=latest.reset_at if latest.reset_at is not None else current.reset_at,
+    )
+
+
+def _sum_optional_ints(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
