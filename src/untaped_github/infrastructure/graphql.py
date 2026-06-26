@@ -47,7 +47,10 @@ _PAGE_SIZE = 100
 _MISSING_ERROR_TYPES = frozenset({"NOT_FOUND", "FORBIDDEN"})
 _GRAPHQL_ACCESS_STATUSES = frozenset({401, 403, 429})
 _RATE_LIMIT_FIELD = "rateLimit { cost remaining resetAt }"
+# These short delays only catch immediate blips. Sustained transient
+# failures are handled by adaptive splitting and by callers rerunning.
 _TRANSIENT_RETRY_DELAYS = (0.01, 0.02)
+_NO_PROGRESS_SPLIT_LOOKAHEAD = 1
 # Annotated tags point at a Tag object instead of a commit; peel via
 # nested ``target { oid }`` two levels deep (covers tags-of-tags).
 _TARGET_FIELD = "target { oid ... on Tag { target { oid ... on Tag { target { oid } } } } }"
@@ -110,11 +113,12 @@ def fetch_repo_refs(
         execution = _execute_chunk(http, endpoint, chunk, query)
         failures.extend(execution.failures)
         for subchunk, payload in execution.payloads:
-            found, gone, chunk_rate_limit = _resolve_chunk(
+            found, gone, failed, chunk_rate_limit = _resolve_chunk(
                 http, endpoint, subchunk, ref_kinds, payload
             )
             collected.extend(found)
             missing.extend(gone)
+            failures.extend(failed)
             rate_limit = _merge_rate_limit(rate_limit, chunk_rate_limit)
     return BatchRepoRefsResult(
         repos=tuple(collected),
@@ -194,7 +198,15 @@ def _execute_chunk(
     except HttpError as exc:
         if not _is_transient_probe_error(exc):
             raise
-        return _split_failed_chunk(http, endpoint, chunk, query, exc)
+        if len(chunk) == 1:
+            return _ChunkExecution([], _transient_failures(chunk, exc))
+        return _split_failed_chunk(
+            http,
+            endpoint,
+            chunk,
+            query,
+            no_progress_split_lookahead=_NO_PROGRESS_SPLIT_LOOKAHEAD,
+        )
 
 
 def _is_server_error(exc: HttpError) -> bool:
@@ -206,20 +218,17 @@ def _is_transient_probe_error(exc: HttpError) -> bool:
 
 
 def _post_with_transient_retries(http: HttpClient, endpoint: str, query: str) -> dict[str, Any]:
-    try:
-        return _post(http, endpoint, query)
-    except HttpError as exc:
-        if not _is_transient_probe_error(exc):
-            raise
-        last_exc = exc
-    for delay in _TRANSIENT_RETRY_DELAYS:
-        time.sleep(delay)
+    last_exc: HttpError | None = None
+    for delay in (0.0, *_TRANSIENT_RETRY_DELAYS):
+        if delay:
+            time.sleep(delay)
         try:
             return _post(http, endpoint, query)
         except HttpError as exc:
             if not _is_transient_probe_error(exc):
                 raise
             last_exc = exc
+    assert last_exc is not None
     raise last_exc
 
 
@@ -228,10 +237,12 @@ def _split_failed_chunk(
     endpoint: str,
     chunk: tuple[_RepoTarget, ...],
     query: Callable[[tuple[_RepoTarget, ...]], str],
-    failed_exc: HttpError,
+    *,
+    no_progress_split_lookahead: int,
 ) -> _ChunkExecution:
     if len(chunk) == 1:
-        return _ChunkExecution([], _transient_failures(chunk, failed_exc))
+        msg = "single-repo chunks must be classified by their captured transient failure"
+        raise AssertionError(msg)
     mid = len(chunk) // 2
     attempts: list[tuple[tuple[_RepoTarget, ...], dict[str, Any] | HttpError]] = []
     any_success = False
@@ -243,8 +254,8 @@ def _split_failed_chunk(
             if not _is_transient_probe_error(exc):
                 raise
             attempts.append((half, exc))
-    if not any_success:
-        return _ChunkExecution([], _transient_failures(chunk, failed_exc))
+    if not any_success and no_progress_split_lookahead <= 0:
+        return _ChunkExecution([], _transient_failures_from_attempts(attempts))
 
     payloads: list[tuple[tuple[_RepoTarget, ...], dict[str, Any]]] = []
     failures: list[BatchRepoRefsFailure] = []
@@ -252,26 +263,48 @@ def _split_failed_chunk(
         if isinstance(outcome, dict):
             payloads.append((half, outcome))
             continue
-        narrowed = _split_failed_chunk(http, endpoint, half, query, outcome)
+        if len(half) == 1:
+            failures.extend(_transient_failures(half, outcome))
+            continue
+        narrowed = _split_failed_chunk(
+            http,
+            endpoint,
+            half,
+            query,
+            no_progress_split_lookahead=(
+                _NO_PROGRESS_SPLIT_LOOKAHEAD if any_success else no_progress_split_lookahead - 1
+            ),
+        )
         payloads.extend(narrowed.payloads)
         failures.extend(narrowed.failures)
     return _ChunkExecution(payloads, failures)
+
+
+def _transient_failures_from_attempts(
+    attempts: list[tuple[tuple[_RepoTarget, ...], dict[str, Any] | HttpError]],
+) -> list[BatchRepoRefsFailure]:
+    failures: list[BatchRepoRefsFailure] = []
+    for chunk, outcome in attempts:
+        if isinstance(outcome, HttpError):
+            failures.extend(_transient_failures(chunk, outcome))
+    return failures
 
 
 def _transient_failures(
     chunk: tuple[_RepoTarget, ...],
     exc: HttpError,
 ) -> list[BatchRepoRefsFailure]:
-    return [
-        BatchRepoRefsFailure(
-            full_name=target.full_name,
-            reason=str(exc),
-            kind=_transient_failure_kind(exc),
-            status_code=exc.status_code,
-            url=exc.url,
-        )
-        for target in chunk
-    ]
+    return [_transient_failure(target, exc) for target in chunk]
+
+
+def _transient_failure(target: _RepoTarget, exc: HttpError) -> BatchRepoRefsFailure:
+    return BatchRepoRefsFailure(
+        full_name=target.full_name,
+        reason=str(exc),
+        kind=_transient_failure_kind(exc),
+        status_code=exc.status_code,
+        url=exc.url,
+    )
 
 
 def _transient_failure_kind(exc: HttpError) -> BatchRepoRefsFailureKind:
@@ -282,7 +315,7 @@ def _transient_failure_kind(exc: HttpError) -> BatchRepoRefsFailureKind:
 
 def _post(http: HttpClient, endpoint: str, query: str) -> dict[str, Any]:
     try:
-        payload = http.post_json(endpoint, json={"query": query})
+        payload = http.post_json(endpoint, json={"query": query}, retry=None)
     except HttpError as exc:
         if exc.status_code in _GRAPHQL_ACCESS_STATUSES:
             raise _graphql_http_error(exc) from exc
@@ -346,12 +379,13 @@ def _resolve_chunk(
     chunk: tuple[_RepoTarget, ...],
     kinds: tuple[RefKind, ...],
     payload: dict[str, Any],
-) -> tuple[list[RepoRefs], list[str], _RateLimit]:
+) -> tuple[list[RepoRefs], list[str], list[BatchRepoRefsFailure], _RateLimit]:
     """Parse one chunk payload; issues follow-up POSTs for ref pagination."""
     missing_aliases = _classify_errors(payload)
     data = payload.get("data") or {}
     found: list[RepoRefs] = []
     missing: list[str] = []
+    failures: list[BatchRepoRefsFailure] = []
     rate_limit = _rate_limit(payload)
     for index, target in enumerate(chunk):
         alias = f"r{index}"
@@ -364,10 +398,13 @@ def _resolve_chunk(
                 )
             missing.append(target.full_name)
             continue
-        repo_refs, page_rate_limit = _resolve_repo(http, endpoint, target, node, kinds)
+        repo_result, page_rate_limit = _resolve_repo(http, endpoint, target, node, kinds)
         rate_limit = _merge_rate_limit(rate_limit, page_rate_limit)
-        found.append(repo_refs)
-    return found, missing, rate_limit
+        if isinstance(repo_result, BatchRepoRefsFailure):
+            failures.append(repo_result)
+            continue
+        found.append(repo_result)
+    return found, missing, failures, rate_limit
 
 
 def _resolve_default_branch_chunk(
@@ -534,7 +571,7 @@ def _resolve_repo(
     target: _RepoTarget,
     node: dict[str, Any],
     kinds: tuple[RefKind, ...],
-) -> tuple[RepoRefs, _RateLimit]:
+) -> tuple[RepoRefs | BatchRepoRefsFailure, _RateLimit]:
     """Build one :class:`RepoRefs`, following ref-pagination cursors.
 
     Repos with >100 refs in a namespace are rare; follow-up single-repo
@@ -549,7 +586,16 @@ def _resolve_repo(
             page = connection["pageInfo"]
             if not page["hasNextPage"]:
                 break
-            payload = _post(http, endpoint, _build_page_query(target, kind, page["endCursor"]))
+            try:
+                payload = _post_with_transient_retries(
+                    http,
+                    endpoint,
+                    _build_page_query(target, kind, page["endCursor"]),
+                )
+            except HttpError as exc:
+                if not _is_transient_probe_error(exc):
+                    raise
+                return _transient_failure(target, exc), rate_limit
             # The repo resolved in the batch query, so even NOT_FOUND
             # here (deleted mid-probe) is unexpected enough to raise.
             if _classify_errors(payload):

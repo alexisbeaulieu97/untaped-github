@@ -190,8 +190,9 @@ behaviors:
   chunk, then adaptively split only after retry exhaustion. Successful
   subchunks are preserved; isolated transient repo failures land in
   `BatchRepoRefsResult.failures` as `BatchRepoRefsFailure` rows. If both
-  halves fail without any success, splitting stops and the original chunk
-  is reported as transient failures to avoid amplifying a GitHub outage.
+  halves fail without any success, the split recurses one additional
+  generation before reporting the remaining subchunks as transient
+  failures to avoid unbounded GitHub outage amplification.
 - **Global GraphQL access failures raise `GithubGraphqlError`.** HTTP
   `401`, `403`, and `429` responses from `/graphql`, plus unscoped
   GraphQL errors such as `RATE_LIMITED`, are classified as
@@ -205,6 +206,9 @@ behaviors:
   failure.
 - **Ref-pagination overflow** (>100 refs in a namespace) is followed
   serially with single-repo `after: <cursor>` queries until exhausted.
+  Exhausted transient HTTP 5xx or transport failures during pagination
+  become one `BatchRepoRefsFailure` for that repo; repo-lost errors still
+  raise because they are not transient.
 - **Adaptive 5xx behavior applies to both probe modes.** All-ref probes
   and connection-free default-branch probes share the same bounded retry
   and adaptive split machinery.
