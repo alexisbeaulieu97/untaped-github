@@ -250,6 +250,73 @@ def test_batch_default_branch_refs_uses_connection_free_query_and_synthesizes_he
     assert result.rate_limit_cost == 1
 
 
+def test_batch_default_branch_refs_retries_5xx_with_chunk_split_in_half() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(
+            side_effect=[
+                httpx.Response(502, text="Bad Gateway"),
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {
+                            "r0": {
+                                "nameWithOwner": "acme/a",
+                                "defaultBranchRef": {"name": "main", "target": {"oid": "sha-a"}},
+                            }
+                        }
+                    ),
+                ),
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {
+                            "r0": {
+                                "nameWithOwner": "acme/b",
+                                "defaultBranchRef": {"name": "main", "target": {"oid": "sha-b"}},
+                            }
+                        }
+                    ),
+                ),
+            ]
+        )
+        with _client() as client:
+            result = client.batch_default_branch_refs(["acme/a", "acme/b"], chunk_size=2)
+
+    assert route.call_count == 3
+    assert 'name: "a"' in _query(route, 1)
+    assert 'name: "b"' not in _query(route, 1)
+    assert 'name: "b"' in _query(route, 2)
+    assert "refs(" not in _query(route, 1)
+    assert "refs(" not in _query(route, 2)
+    assert [(repo.full_name, repo.refs[0].sha) for repo in result.repos] == [
+        ("acme/a", "sha-a"),
+        ("acme/b", "sha-b"),
+    ]
+
+
+def test_batch_default_branch_refs_raises_when_split_half_still_5xxs() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(
+            side_effect=[
+                httpx.Response(502, text="Bad Gateway"),
+                httpx.Response(502, text="Bad Gateway"),
+            ]
+        )
+        with _client() as client, pytest.raises(HttpError):
+            client.batch_default_branch_refs(["acme/a", "acme/b"], chunk_size=2)
+
+    assert route.call_count == 2
+
+
+def test_batch_default_branch_refs_does_not_split_single_repo_chunk_on_5xx() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(side_effect=[httpx.Response(502, text="Bad Gateway")])
+        with _client() as client, pytest.raises(HttpError):
+            client.batch_default_branch_refs(["acme/a"])
+
+    assert route.call_count == 1
+
+
 def test_batch_repo_refs_chunks_requests_by_chunk_size() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         route = mock.post("/graphql").mock(
