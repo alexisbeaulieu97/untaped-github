@@ -107,7 +107,10 @@ class GithubClient:
         Batches ``chunk_size`` repos per aliased GraphQL POST, so ~1500
         repos resolve in ~30 API calls. ``kinds`` selects the ref
         namespaces; passing only ``("heads",)`` omits the tags
-        connection and halves the GraphQL point cost.
+        connection and halves the GraphQL point cost. Transient 5xx or
+        transport failures are returned per repo in
+        ``BatchRepoRefsResult.failures`` when adaptive retries cannot
+        resolve them.
         """
         return fetch_repo_refs(
             self._http,
@@ -123,7 +126,11 @@ class GithubClient:
         *,
         chunk_size: int = 200,
     ) -> BatchRepoRefsResult:
-        """Probe only default-branch heads for many ``owner/name`` repos via GraphQL."""
+        """Probe only default-branch heads for many ``owner/name`` repos via GraphQL.
+
+        Uses the same transient failure reporting contract as
+        :meth:`batch_repo_refs`.
+        """
         return fetch_default_branch_refs(
             self._http,
             self._graphql_endpoint,

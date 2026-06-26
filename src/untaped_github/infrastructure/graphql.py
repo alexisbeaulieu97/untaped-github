@@ -2,16 +2,18 @@
 
 This module isolates GraphQL mechanics — query building, alias
 bookkeeping, response parsing, missing-repo classification, per-repo ref
-pagination, and the 5xx split-retry — the same way ``pagination.py``
-isolates REST ``Link``-header mechanics. ``GithubClient`` only wires an
-``HttpClient`` and the derived GraphQL endpoint into
+pagination, and transient 5xx/transport retry splitting — the same way
+``pagination.py`` isolates REST ``Link``-header mechanics. ``GithubClient``
+only wires an ``HttpClient`` and the derived GraphQL endpoint into
 :func:`fetch_repo_refs`.
 
 Each chunk of repositories becomes one POST with aliases ``r0..rN`` that
 map back to input order. Repositories GitHub reports as ``NOT_FOUND`` or
 ``FORBIDDEN`` arrive as a ``null`` data node plus an ``errors`` entry
-with ``path: ["rX"]``; those are collected, not raised. Global GraphQL
-access failures raise :class:`untaped_github.GithubGraphqlError`.
+with ``path: ["rX"]``; those are collected, not raised. Transient
+HTTP 5xx and transport failures are narrowed into per-repo
+``BatchRepoRefsFailure`` results when possible. Global GraphQL access
+failures raise :class:`untaped_github.GithubGraphqlError`.
 
 GraphQL cost: roughly one point per repo per ref connection, against a
 separate 5000 points/hour budget. A full heads+tags probe of 1500 repos
@@ -22,21 +24,30 @@ tags connection from the query entirely.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from itertools import batched
 from typing import Any, NamedTuple, cast
 
-from untaped.api import HttpClient, HttpError, UntapedError
+from untaped.api import HttpClient, HttpError, HttpTransportError, UntapedError
 
 from untaped_github.domain.errors import GithubGraphqlError, GithubGraphqlErrorKind
-from untaped_github.domain.models import BatchRepoRefsResult, RefKind, RepoRef, RepoRefs
+from untaped_github.domain.models import (
+    BatchRepoRefsFailure,
+    BatchRepoRefsFailureKind,
+    BatchRepoRefsResult,
+    RefKind,
+    RepoRef,
+    RepoRefs,
+)
 
 _REF_PREFIXES: dict[RefKind, str] = {"heads": "refs/heads/", "tags": "refs/tags/"}
 _PAGE_SIZE = 100
 _MISSING_ERROR_TYPES = frozenset({"NOT_FOUND", "FORBIDDEN"})
 _GRAPHQL_ACCESS_STATUSES = frozenset({401, 403, 429})
 _RATE_LIMIT_FIELD = "rateLimit { cost remaining resetAt }"
+_TRANSIENT_RETRY_DELAYS = (0.01, 0.02)
 # Annotated tags point at a Tag object instead of a commit; peel via
 # nested ``target { oid }`` two levels deep (covers tags-of-tags).
 _TARGET_FIELD = "target { oid ... on Tag { target { oid ... on Tag { target { oid } } } } }"
@@ -52,6 +63,11 @@ class _RateLimit(NamedTuple):
     cost: int | None = None
     remaining: int | None = None
     reset_at: datetime | None = None
+
+
+class _ChunkExecution(NamedTuple):
+    payloads: list[tuple[tuple[_RepoTarget, ...], dict[str, Any]]]
+    failures: list[BatchRepoRefsFailure]
 
 
 def graphql_endpoint(base_url: str) -> str:
@@ -84,13 +100,16 @@ def fetch_repo_refs(
     targets = [_parse_repo_target(repo) for repo in repos]
     collected: list[RepoRefs] = []
     missing: list[str] = []
+    failures: list[BatchRepoRefsFailure] = []
     rate_limit = _RateLimit()
 
     def query(subchunk: tuple[_RepoTarget, ...]) -> str:
         return _build_batch_query(subchunk, ref_kinds)
 
     for chunk in batched(targets, chunk_size, strict=False):
-        for subchunk, payload in _execute_chunk(http, endpoint, chunk, query):
+        execution = _execute_chunk(http, endpoint, chunk, query)
+        failures.extend(execution.failures)
+        for subchunk, payload in execution.payloads:
             found, gone, chunk_rate_limit = _resolve_chunk(
                 http, endpoint, subchunk, ref_kinds, payload
             )
@@ -100,6 +119,7 @@ def fetch_repo_refs(
     return BatchRepoRefsResult(
         repos=tuple(collected),
         missing=tuple(missing),
+        failures=tuple(failures),
         rate_limit_cost=rate_limit.cost,
         rate_limit_remaining=rate_limit.remaining,
         rate_limit_reset_at=rate_limit.reset_at,
@@ -119,9 +139,12 @@ def fetch_default_branch_refs(
     targets = [_parse_repo_target(repo) for repo in repos]
     collected: list[RepoRefs] = []
     missing: list[str] = []
+    failures: list[BatchRepoRefsFailure] = []
     rate_limit = _RateLimit()
     for chunk in batched(targets, chunk_size, strict=False):
-        for subchunk, payload in _execute_chunk(http, endpoint, chunk, _build_default_branch_query):
+        execution = _execute_chunk(http, endpoint, chunk, _build_default_branch_query)
+        failures.extend(execution.failures)
+        for subchunk, payload in execution.payloads:
             found, gone, chunk_rate_limit = _resolve_default_branch_chunk(subchunk, payload)
             collected.extend(found)
             missing.extend(gone)
@@ -129,6 +152,7 @@ def fetch_default_branch_refs(
     return BatchRepoRefsResult(
         repos=tuple(collected),
         missing=tuple(missing),
+        failures=tuple(failures),
         rate_limit_cost=rate_limit.cost,
         rate_limit_remaining=rate_limit.remaining,
         rate_limit_reset_at=rate_limit.reset_at,
@@ -162,24 +186,98 @@ def _execute_chunk(
     endpoint: str,
     chunk: tuple[_RepoTarget, ...],
     query: Callable[[tuple[_RepoTarget, ...]], str],
-) -> list[tuple[tuple[_RepoTarget, ...], dict[str, Any]]]:
-    """POST one chunk; on a 5xx, retry once with the chunk split in half.
-
-    GitHub intermittently 502s on large aliased queries. If a half still
-    5xxs (or the chunk cannot be split), the :class:`HttpError`
-    propagates.
-    """
+) -> _ChunkExecution:
+    """POST one chunk; adaptively isolate retryable transient failures."""
     try:
-        return [(chunk, _post(http, endpoint, query(chunk)))]
+        payload = _post_with_transient_retries(http, endpoint, query(chunk))
+        return _ChunkExecution([(chunk, payload)], [])
     except HttpError as exc:
-        if not _is_server_error(exc) or len(chunk) < 2:
+        if not _is_transient_probe_error(exc):
             raise
-    mid = len(chunk) // 2
-    return [(half, _post(http, endpoint, query(half))) for half in (chunk[:mid], chunk[mid:])]
+        return _split_failed_chunk(http, endpoint, chunk, query, exc)
 
 
 def _is_server_error(exc: HttpError) -> bool:
     return exc.status_code is not None and exc.status_code >= 500
+
+
+def _is_transient_probe_error(exc: HttpError) -> bool:
+    return _is_server_error(exc) or isinstance(exc, HttpTransportError)
+
+
+def _post_with_transient_retries(http: HttpClient, endpoint: str, query: str) -> dict[str, Any]:
+    try:
+        return _post(http, endpoint, query)
+    except HttpError as exc:
+        if not _is_transient_probe_error(exc):
+            raise
+        last_exc = exc
+    for delay in _TRANSIENT_RETRY_DELAYS:
+        time.sleep(delay)
+        try:
+            return _post(http, endpoint, query)
+        except HttpError as exc:
+            if not _is_transient_probe_error(exc):
+                raise
+            last_exc = exc
+    raise last_exc
+
+
+def _split_failed_chunk(
+    http: HttpClient,
+    endpoint: str,
+    chunk: tuple[_RepoTarget, ...],
+    query: Callable[[tuple[_RepoTarget, ...]], str],
+    failed_exc: HttpError,
+) -> _ChunkExecution:
+    if len(chunk) == 1:
+        return _ChunkExecution([], _transient_failures(chunk, failed_exc))
+    mid = len(chunk) // 2
+    attempts: list[tuple[tuple[_RepoTarget, ...], dict[str, Any] | HttpError]] = []
+    any_success = False
+    for half in (chunk[:mid], chunk[mid:]):
+        try:
+            attempts.append((half, _post_with_transient_retries(http, endpoint, query(half))))
+            any_success = True
+        except HttpError as exc:
+            if not _is_transient_probe_error(exc):
+                raise
+            attempts.append((half, exc))
+    if not any_success:
+        return _ChunkExecution([], _transient_failures(chunk, failed_exc))
+
+    payloads: list[tuple[tuple[_RepoTarget, ...], dict[str, Any]]] = []
+    failures: list[BatchRepoRefsFailure] = []
+    for half, outcome in attempts:
+        if isinstance(outcome, dict):
+            payloads.append((half, outcome))
+            continue
+        narrowed = _split_failed_chunk(http, endpoint, half, query, outcome)
+        payloads.extend(narrowed.payloads)
+        failures.extend(narrowed.failures)
+    return _ChunkExecution(payloads, failures)
+
+
+def _transient_failures(
+    chunk: tuple[_RepoTarget, ...],
+    exc: HttpError,
+) -> list[BatchRepoRefsFailure]:
+    return [
+        BatchRepoRefsFailure(
+            full_name=target.full_name,
+            reason=str(exc),
+            kind=_transient_failure_kind(exc),
+            status_code=exc.status_code,
+            url=exc.url,
+        )
+        for target in chunk
+    ]
+
+
+def _transient_failure_kind(exc: HttpError) -> BatchRepoRefsFailureKind:
+    if _is_server_error(exc):
+        return "server_error"
+    return "transport"
 
 
 def _post(http: HttpClient, endpoint: str, query: str) -> dict[str, Any]:

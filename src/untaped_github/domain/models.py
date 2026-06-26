@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 RefKind = Literal["heads", "tags"]
 """Ref namespace probed by ``GithubClient.batch_repo_refs``."""
 
+BatchRepoRefsFailureKind = Literal["server_error", "transport"]
+"""Retryable per-repo failure class from a batched GraphQL ref probe."""
+
 
 class GithubUser(BaseModel):
     """Authenticated GitHub user as returned by ``GET /user``."""
@@ -169,13 +172,26 @@ class RepoRefs(BaseModel):
     refs: tuple[RepoRef, ...] = ()
 
 
+class BatchRepoRefsFailure(BaseModel):
+    """Retryable per-repo failure from a batched GraphQL ref probe."""
+
+    model_config = ConfigDict(frozen=True)
+
+    full_name: str
+    reason: str
+    kind: BatchRepoRefsFailureKind
+    status_code: int | None = None
+    url: str | None = None
+
+
 class BatchRepoRefsResult(BaseModel):
     """Outcome of a batched GraphQL ref probe.
 
     ``repos`` preserves input order, skipping entries listed in
     ``missing`` (repositories GitHub reported as ``NOT_FOUND`` or
-    ``FORBIDDEN``). ``rate_limit_cost`` is the summed GraphQL
-    ``rateLimit.cost`` across all POSTs in this operation, while
+    ``FORBIDDEN``) or ``failures`` (repositories whose chunk was narrowed
+    down to a retryable transient failure). ``rate_limit_cost`` is the
+    summed GraphQL ``rateLimit.cost`` across all POSTs in this operation, while
     ``rate_limit_remaining`` and ``rate_limit_reset_at`` surface the
     latest available budget values so callers can warn or stop when the
     hourly budget runs low.
@@ -185,6 +201,7 @@ class BatchRepoRefsResult(BaseModel):
 
     repos: tuple[RepoRefs, ...] = ()
     missing: tuple[str, ...] = ()
+    failures: tuple[BatchRepoRefsFailure, ...] = ()
     rate_limit_cost: int | None = None
     rate_limit_remaining: int | None = None
     rate_limit_reset_at: datetime | None = None

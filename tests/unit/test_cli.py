@@ -41,6 +41,7 @@ def _write_missing_theme_config(tmp_path: Path) -> Path:
 
 def test_root_package_public_surface_is_slim() -> None:
     assert untaped_github.__all__ == [
+        "BatchRepoRefsFailure",
         "BatchRepoRefsResult",
         "GithubClient",
         "GithubGraphqlError",

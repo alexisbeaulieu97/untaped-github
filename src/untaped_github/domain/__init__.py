@@ -1,4 +1,5 @@
 from untaped_github.domain.models import (
+    BatchRepoRefsFailure,
     BatchRepoRefsResult,
     CodeResult,
     GithubUser,
@@ -17,6 +18,7 @@ from untaped_github.domain.queries import (
 )
 
 __all__ = [
+    "BatchRepoRefsFailure",
     "BatchRepoRefsResult",
     "CodeResult",
     "CodeSearchFilters",

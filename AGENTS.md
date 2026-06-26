@@ -143,9 +143,10 @@ the SDK's `HttpSettings`.
 `untaped_github` intentionally re-exports `GithubClient`,
 `GithubSettings`, and `GithubGraphqlError` for sibling untaped tools that
 need GitHub access, plus the ref-probe result models
-(`BatchRepoRefsResult`, `RepoRefs`, `RepoRef`) and reusable inventory
-helpers (`RepositoryInventoryScope`, `RepositoryInventoryItem`,
-`ResolveRepositoryInventory`, `TeamScope`, `normalize_team_scopes`).
+(`BatchRepoRefsResult`, `BatchRepoRefsFailure`, `RepoRefs`, `RepoRef`)
+and reusable inventory helpers (`RepositoryInventoryScope`,
+`RepositoryInventoryItem`, `ResolveRepositoryInventory`, `TeamScope`,
+`normalize_team_scopes`).
 Keep this surface small and tested. Library consumers may use repository
 metadata, org/team repository inventory expansion, matching refs, batched
 ref probing, tree reads, and raw content reads. Add missing GitHub
@@ -184,6 +185,13 @@ behaviors:
   or `FORBIDDEN` error with exact `path: ["rX"]` lands the input full
   name in `BatchRepoRefsResult.missing`; nested paths raise
   `GithubGraphqlError`.
+- **Transient probe failures are per-repo results.** Retryable GraphQL
+  HTTP 5xx responses and transport failures are retried on the same
+  chunk, then adaptively split only after retry exhaustion. Successful
+  subchunks are preserved; isolated transient repo failures land in
+  `BatchRepoRefsResult.failures` as `BatchRepoRefsFailure` rows. If both
+  halves fail without any success, splitting stops and the original chunk
+  is reported as transient failures to avoid amplifying a GitHub outage.
 - **Global GraphQL access failures raise `GithubGraphqlError`.** HTTP
   `401`, `403`, and `429` responses from `/graphql`, plus unscoped
   GraphQL errors such as `RATE_LIMITED`, are classified as
@@ -197,9 +205,9 @@ behaviors:
   failure.
 - **Ref-pagination overflow** (>100 refs in a namespace) is followed
   serially with single-repo `after: <cursor>` queries until exhausted.
-- **5xx split-retry.** GitHub intermittently 502s on aliased GraphQL
-  queries; all-ref and default-branch chunks are retried once split in
-  half, and a half that still 5xxs raises `HttpError`.
+- **Adaptive 5xx behavior applies to both probe modes.** All-ref probes
+  and connection-free default-branch probes share the same bounded retry
+  and adaptive split machinery.
 
 GraphQL has its own 5000 points/hour budget (separate from REST), at
 roughly one point per repo per ref connection. A full heads+tags probe

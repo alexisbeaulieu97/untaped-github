@@ -12,7 +12,12 @@ from untaped_github.application import (
     normalize_team_scopes,
 )
 from untaped_github.domain.errors import GithubGraphqlError
-from untaped_github.domain.models import BatchRepoRefsResult, RepoRef, RepoRefs
+from untaped_github.domain.models import (
+    BatchRepoRefsFailure,
+    BatchRepoRefsResult,
+    RepoRef,
+    RepoRefs,
+)
 from untaped_github.infrastructure import GithubClient
 from untaped_github.settings import GithubSettings
 
@@ -20,6 +25,7 @@ if TYPE_CHECKING:
     from cyclopts import App
 
 __all__ = [
+    "BatchRepoRefsFailure",
     "BatchRepoRefsResult",
     "GithubClient",
     "GithubGraphqlError",
