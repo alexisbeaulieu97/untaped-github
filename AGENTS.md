@@ -175,8 +175,9 @@ behaviors:
 - **`kinds=("heads",)` omits the tags connection entirely**, halving the
   per-repo point cost.
 - **Missing repos don't raise.** A `null` data node plus a `NOT_FOUND`
-  or `FORBIDDEN` error with `path: ["rX"]` lands the input full name in
-  `BatchRepoRefsResult.missing`.
+  or `FORBIDDEN` error with exact `path: ["rX"]` lands the input full
+  name in `BatchRepoRefsResult.missing`; nested paths raise
+  `GithubGraphqlError`.
 - **Global GraphQL access failures raise `GithubGraphqlError`.** HTTP
   `401`, `403`, and `429` responses from `/graphql`, plus unscoped
   GraphQL errors such as `RATE_LIMITED`, are classified as

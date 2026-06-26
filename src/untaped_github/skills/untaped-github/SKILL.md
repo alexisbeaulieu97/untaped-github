@@ -33,7 +33,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 ## Client API Notes
 
 - `untaped_github` exports `GithubClient`, `GithubSettings`, `GithubGraphqlError`, and the `batch_repo_refs` result models for sibling untaped tools.
-- `GithubClient.batch_repo_refs(...)` treats path-scoped GraphQL `NOT_FOUND`/`FORBIDDEN` errors (`path: ["rX"]`) as per-repo missing results. Global `/graphql` access failures such as HTTP `401`/`403`/`429` or unscoped `RATE_LIMITED` raise `GithubGraphqlError`, which subclasses `UntapedError` and has a user-ready message.
+- `GithubClient.batch_repo_refs(...)` treats exact path-scoped GraphQL `NOT_FOUND`/`FORBIDDEN` errors (`path: ["rX"]`) as per-repo missing results. Nested paths raise `GithubGraphqlError`. Global `/graphql` access failures such as HTTP `401`/`403`/`429` or unscoped `RATE_LIMITED` raise `GithubGraphqlError`, which subclasses `UntapedError` and has a user-ready message.
 - Known limitation: a `200 OK` response containing per-alias `FORBIDDEN` for every repo is still reported as per-repo missing/inaccessible rather than inferred as a global SSO or token-scope failure.
 
 ## Agent Guidance

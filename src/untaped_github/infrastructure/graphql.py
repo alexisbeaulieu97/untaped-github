@@ -236,7 +236,7 @@ def _classify_errors(payload: dict[str, Any]) -> set[str]:
 
 
 def _repo_alias_from_path(path: object) -> str | None:
-    if not isinstance(path, list | tuple) or not path:
+    if not isinstance(path, list | tuple) or len(path) != 1:
         return None
     alias = path[0]
     if isinstance(alias, str) and alias.startswith("r") and alias[1:].isdigit():
@@ -289,9 +289,17 @@ def _message_from_body(body: str | None) -> str | None:
     except ValueError:
         return stripped
     if isinstance(decoded, dict):
-        message = decoded.get("message")
-        if isinstance(message, str) and message.strip():
-            return message
+        for key in ("message", "error", "detail"):
+            message = decoded.get(key)
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        errors = decoded.get("errors")
+        if isinstance(errors, list):
+            for item in errors:
+                if isinstance(item, dict):
+                    message = item.get("message")
+                    if isinstance(message, str) and message.strip():
+                        return message.strip()
     return stripped
 
 
