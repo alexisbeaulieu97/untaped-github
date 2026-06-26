@@ -197,9 +197,9 @@ behaviors:
   failure.
 - **Ref-pagination overflow** (>100 refs in a namespace) is followed
   serially with single-repo `after: <cursor>` queries until exhausted.
-- **5xx split-retry.** GitHub intermittently 502s on large aliased
-  queries; the chunk is retried once split in half, and a half that
-  still 5xxs raises `HttpError`.
+- **5xx split-retry.** GitHub intermittently 502s on aliased GraphQL
+  queries; all-ref and default-branch chunks are retried once split in
+  half, and a half that still 5xxs raises `HttpError`.
 
 GraphQL has its own 5000 points/hour budget (separate from REST), at
 roughly one point per repo per ref connection. A full heads+tags probe

@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
+from untaped.api import HttpError, UntapedError
 
 from untaped_github.application import (
     GithubRepoListService,
@@ -24,9 +25,11 @@ class _StubRepoLists:
         *,
         orgs: dict[str, list[dict[str, Any]]] | None = None,
         teams: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
+        repo_errors: dict[str, Exception] | None = None,
     ) -> None:
         self._orgs = orgs or {}
         self._teams = teams or {}
+        self._repo_errors = repo_errors or {}
         self.calls: list[tuple[str, str, str | None]] = []
 
     def list_org_repos(self, org: str) -> Iterator[dict[str, Any]]:
@@ -40,6 +43,9 @@ class _StubRepoLists:
     def get_repository(self, owner: str, repo: str) -> dict[str, Any]:
         full_name = f"{owner}/{repo}"
         self.calls.append(("repo", owner, repo))
+        error = self._repo_errors.get(full_name)
+        if error is not None:
+            raise error
         return _repo(full_name, default_branch="trunk")
 
 
@@ -119,6 +125,24 @@ def test_list_repos_pattern_with_slash_matches_full_name() -> None:
     assert [row.full_name for row in rows] == ["acme/play-api"]
 
 
+def test_list_repos_handles_sparse_inventory_rows_with_leaf_name_fallback() -> None:
+    stub = _StubRepoLists(
+        orgs={
+            "acme": [
+                {"full_name": "acme/play-api"},
+                {"full_name": "acme/other"},
+            ]
+        }
+    )
+    use_case = ListRepos(_service(stub))
+
+    rows = list(use_case(RepoListFilters(pattern="play*"), orgs=("acme",)))
+
+    assert [row.full_name for row in rows] == ["acme/play-api"]
+    assert rows[0].name == "play-api"
+    assert rows[0].html_url is None
+
+
 def test_list_repos_regex_matches_selected_target_case_insensitively() -> None:
     stub = _StubRepoLists(orgs={"acme": [_repo("acme/Play-1"), _repo("acme/play-x")]})
     use_case = ListRepos(_service(stub))
@@ -162,6 +186,38 @@ def test_resolve_repository_inventory_expands_dedupes_sorts_and_prefers_explicit
     ]
     assert [row.full_name for row in rows] == ["acme/api", "acme/site", "acme/zeta"]
     assert rows[1].default_branch == "trunk"
+
+
+def test_resolve_repository_inventory_rejects_invalid_explicit_repo_as_untaped_error() -> None:
+    use_case = ResolveRepositoryInventory(_service(_StubRepoLists()))
+
+    with pytest.raises(UntapedError) as exc_info:
+        use_case(RepositoryInventoryScope(repos=("acme/site/extra",)))
+
+    assert "repository must be owner/name" in str(exc_info.value)
+    assert "acme/site/extra" in str(exc_info.value)
+
+
+def test_resolve_repository_inventory_wraps_explicit_repo_lookup_errors() -> None:
+    stub = _StubRepoLists(
+        orgs={"acme": [_repo("acme/ok")]},
+        repo_errors={
+            "acme/gone": HttpError(
+                "Not Found",
+                status_code=404,
+                url="https://api.github.com/repos/acme/gone",
+            )
+        },
+    )
+    use_case = ResolveRepositoryInventory(_service(stub))
+
+    with pytest.raises(UntapedError) as exc_info:
+        use_case(RepositoryInventoryScope(orgs=("acme",), repos=("acme/gone",)))
+
+    message = str(exc_info.value)
+    assert "failed to expand repository acme/gone" in message
+    assert "Not Found" in message
+    assert stub.calls == [("repo", "acme", "gone")]
 
 
 def test_normalize_team_scopes_accepts_qualified_and_single_org_bare_teams() -> None:

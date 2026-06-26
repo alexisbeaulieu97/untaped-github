@@ -22,7 +22,7 @@ tags connection from the query entirely.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from itertools import batched
 from typing import Any, NamedTuple, cast
@@ -85,8 +85,12 @@ def fetch_repo_refs(
     collected: list[RepoRefs] = []
     missing: list[str] = []
     rate_limit = _RateLimit()
+
+    def query(subchunk: tuple[_RepoTarget, ...]) -> str:
+        return _build_batch_query(subchunk, ref_kinds)
+
     for chunk in batched(targets, chunk_size, strict=False):
-        for subchunk, payload in _execute_chunk(http, endpoint, chunk, ref_kinds):
+        for subchunk, payload in _execute_chunk(http, endpoint, chunk, query):
             found, gone, chunk_rate_limit = _resolve_chunk(
                 http, endpoint, subchunk, ref_kinds, payload
             )
@@ -117,11 +121,11 @@ def fetch_default_branch_refs(
     missing: list[str] = []
     rate_limit = _RateLimit()
     for chunk in batched(targets, chunk_size, strict=False):
-        payload = _post(http, endpoint, _build_default_branch_query(chunk))
-        found, gone, chunk_rate_limit = _resolve_default_branch_chunk(chunk, payload)
-        collected.extend(found)
-        missing.extend(gone)
-        rate_limit = _merge_rate_limit(rate_limit, chunk_rate_limit)
+        for subchunk, payload in _execute_chunk(http, endpoint, chunk, _build_default_branch_query):
+            found, gone, chunk_rate_limit = _resolve_default_branch_chunk(subchunk, payload)
+            collected.extend(found)
+            missing.extend(gone)
+            rate_limit = _merge_rate_limit(rate_limit, chunk_rate_limit)
     return BatchRepoRefsResult(
         repos=tuple(collected),
         missing=tuple(missing),
@@ -157,7 +161,7 @@ def _execute_chunk(
     http: HttpClient,
     endpoint: str,
     chunk: tuple[_RepoTarget, ...],
-    kinds: tuple[RefKind, ...],
+    query: Callable[[tuple[_RepoTarget, ...]], str],
 ) -> list[tuple[tuple[_RepoTarget, ...], dict[str, Any]]]:
     """POST one chunk; on a 5xx, retry once with the chunk split in half.
 
@@ -166,15 +170,12 @@ def _execute_chunk(
     propagates.
     """
     try:
-        return [(chunk, _post(http, endpoint, _build_batch_query(chunk, kinds)))]
+        return [(chunk, _post(http, endpoint, query(chunk)))]
     except HttpError as exc:
         if not _is_server_error(exc) or len(chunk) < 2:
             raise
     mid = len(chunk) // 2
-    return [
-        (half, _post(http, endpoint, _build_batch_query(half, kinds)))
-        for half in (chunk[:mid], chunk[mid:])
-    ]
+    return [(half, _post(http, endpoint, query(half))) for half in (chunk[:mid], chunk[mid:])]
 
 
 def _is_server_error(exc: HttpError) -> bool:

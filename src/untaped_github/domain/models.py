@@ -48,7 +48,7 @@ class RepoListResult(BaseModel):
 
     full_name: str
     name: str
-    html_url: str
+    html_url: str | None = None
     clone_url: str | None = None
     ssh_url: str | None = None
     default_branch: str | None = None

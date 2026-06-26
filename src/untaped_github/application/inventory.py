@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+from untaped.api import HttpError, UntapedError
 
 from untaped_github.application.ports import GithubRepositoryInventoryService
 from untaped_github.application.scopes import TeamScope
@@ -43,15 +44,21 @@ class ResolveRepositoryInventory:
         self._service = service
 
     def __call__(self, scope: RepositoryInventoryScope) -> tuple[RepositoryInventoryItem, ...]:
-        explicit = {
-            item.full_name: item
-            for item in (
-                _inventory_item(self._service.get_repository(owner, repo), fallback=full_name)
-                for full_name in scope.repos
-                for owner, repo in [_split_repo(full_name)]
-            )
-        }
-        rows: dict[str, RepositoryInventoryItem] = dict(explicit)
+        explicit: dict[str, RepositoryInventoryItem] = {}
+        for full_name in scope.repos:
+            owner, repo = _split_repo(full_name)
+            try:
+                item = _inventory_item(
+                    self._service.get_repository(owner, repo),
+                    fallback=full_name,
+                )
+            except (HttpError, UntapedError) as exc:
+                raise UntapedError(
+                    f"failed to expand repository {full_name}: {str(exc) or type(exc).__name__}"
+                ) from exc
+            explicit[item.full_name] = item
+
+        rows: dict[str, RepositoryInventoryItem] = {}
         for org in scope.orgs:
             for row in self._service.list_org_repos(org):
                 item = _inventory_item(row, fallback=None)
@@ -67,13 +74,15 @@ class ResolveRepositoryInventory:
 def _split_repo(value: str) -> tuple[str, str]:
     owner, sep, repo = value.partition("/")
     if not sep or not owner or not repo or "/" in repo:
-        raise ValueError(f"repository must be owner/name: {value!r}")
+        raise UntapedError(f"repository must be owner/name: {value!r}")
     return owner, repo
 
 
 def _inventory_item(row: dict[str, Any], *, fallback: str | None) -> RepositoryInventoryItem:
     data = dict(row)
-    if not data.get("full_name") and fallback is not None:
-        data["full_name"] = fallback
-        data.setdefault("name", fallback.rsplit("/", 1)[1])
+    full_name = data.get("full_name") or fallback
+    if isinstance(full_name, str) and full_name:
+        data["full_name"] = full_name
+        if not data.get("name"):
+            data["name"] = full_name.rsplit("/", 1)[1]
     return RepositoryInventoryItem.model_validate(data)
