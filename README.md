@@ -53,7 +53,8 @@ Sibling untaped tools may import `GithubClient`, `GithubSettings`,
 `untaped_github`. `GithubClient.batch_repo_refs(...)` probes branch/tag refs;
 `GithubClient.batch_default_branch_refs(...)` probes only default branches with
 a connection-free GraphQL query. Both return `BatchRepoRefsResult`, including
-GraphQL cost, remaining, and reset metadata.
+GraphQL cost, remaining, reset metadata, and per-repo transient failures from
+bounded GraphQL retry/adaptive-split handling.
 
 ## Development
 
