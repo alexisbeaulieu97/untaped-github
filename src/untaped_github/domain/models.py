@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -169,17 +170,21 @@ class RepoRefs(BaseModel):
 
 
 class BatchRepoRefsResult(BaseModel):
-    """Outcome of ``GithubClient.batch_repo_refs``.
+    """Outcome of a batched GraphQL ref probe.
 
     ``repos`` preserves input order, skipping entries listed in
     ``missing`` (repositories GitHub reported as ``NOT_FOUND`` or
-    ``FORBIDDEN``). ``rate_limit_remaining`` surfaces the GraphQL
-    ``rateLimit.remaining`` points from the last response so callers can
-    warn when the hourly budget runs low.
+    ``FORBIDDEN``). ``rate_limit_cost`` is the summed GraphQL
+    ``rateLimit.cost`` across all POSTs in this operation, while
+    ``rate_limit_remaining`` and ``rate_limit_reset_at`` surface the
+    latest available budget values so callers can warn or stop when the
+    hourly budget runs low.
     """
 
     model_config = ConfigDict(frozen=True)
 
     repos: tuple[RepoRefs, ...] = ()
     missing: tuple[str, ...] = ()
+    rate_limit_cost: int | None = None
     rate_limit_remaining: int | None = None
+    rate_limit_reset_at: datetime | None = None

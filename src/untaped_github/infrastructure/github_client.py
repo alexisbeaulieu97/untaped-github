@@ -9,7 +9,11 @@ from typing import Any
 from untaped.api import HttpSettings, connected_client
 
 from untaped_github.domain.models import BatchRepoRefsResult
-from untaped_github.infrastructure.graphql import fetch_repo_refs, graphql_endpoint
+from untaped_github.infrastructure.graphql import (
+    fetch_default_branch_refs,
+    fetch_repo_refs,
+    graphql_endpoint,
+)
 from untaped_github.infrastructure.pagination import paginate_list, paginate_search
 from untaped_github.settings import GithubSettings
 
@@ -110,6 +114,20 @@ class GithubClient:
             self._graphql_endpoint,
             repos,
             kinds=kinds,
+            chunk_size=chunk_size,
+        )
+
+    def batch_default_branch_refs(
+        self,
+        repos: Sequence[str],
+        *,
+        chunk_size: int = 200,
+    ) -> BatchRepoRefsResult:
+        """Probe only default-branch heads for many ``owner/name`` repos via GraphQL."""
+        return fetch_default_branch_refs(
+            self._http,
+            self._graphql_endpoint,
+            repos,
             chunk_size=chunk_size,
         )
 

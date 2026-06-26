@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from untaped_github.application import (
+    RepositoryInventoryItem,
+    RepositoryInventoryScope,
+    ResolveRepositoryInventory,
+    TeamScope,
+    normalize_team_scopes,
+)
 from untaped_github.domain.errors import GithubGraphqlError
 from untaped_github.domain.models import BatchRepoRefsResult, RepoRef, RepoRefs
 from untaped_github.infrastructure import GithubClient
@@ -19,7 +26,12 @@ __all__ = [
     "GithubSettings",
     "RepoRef",
     "RepoRefs",
+    "RepositoryInventoryItem",
+    "RepositoryInventoryScope",
+    "ResolveRepositoryInventory",
+    "TeamScope",
     "app",
+    "normalize_team_scopes",
 ]
 
 

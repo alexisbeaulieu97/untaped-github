@@ -142,12 +142,15 @@ the SDK's `HttpSettings`.
 
 `untaped_github` intentionally re-exports `GithubClient`,
 `GithubSettings`, and `GithubGraphqlError` for sibling untaped tools that
-need GitHub access, plus the `batch_repo_refs` result models
-(`BatchRepoRefsResult`, `RepoRefs`, `RepoRef`). Keep this surface small and tested. Library consumers
-may use repository metadata, org/team repository listing, matching refs,
-batched ref probing, tree reads, and raw content reads. Add missing
-GitHub operations here rather than duplicating a GitHub client in
-another tool or importing private CLI helpers.
+need GitHub access, plus the ref-probe result models
+(`BatchRepoRefsResult`, `RepoRefs`, `RepoRef`) and reusable inventory
+helpers (`RepositoryInventoryScope`, `RepositoryInventoryItem`,
+`ResolveRepositoryInventory`, `TeamScope`, `normalize_team_scopes`).
+Keep this surface small and tested. Library consumers may use repository
+metadata, org/team repository inventory expansion, matching refs, batched
+ref probing, tree reads, and raw content reads. Add missing GitHub
+operations here rather than duplicating a GitHub client in another tool
+or importing private CLI helpers.
 
 ## GraphQL Batched Ref Probe
 
@@ -173,7 +176,10 @@ behaviors:
   `RepoRef.sha` is the deepest fetched oid, so deeper tag chains return
   the innermost fetched oid rather than the final commit.
 - **`kinds=("heads",)` omits the tags connection entirely**, halving the
-  per-repo point cost.
+  per-repo point cost. `GithubClient.batch_default_branch_refs(...)`
+  uses `defaultBranchRef { name target { oid } }` with no `refs(...)`
+  connection and returns the same `BatchRepoRefsResult` shape with one
+  synthesized `heads` ref per repo when a default branch exists.
 - **Missing repos don't raise.** A `null` data node plus a `NOT_FOUND`
   or `FORBIDDEN` error with exact `path: ["rX"]` lands the input full
   name in `BatchRepoRefsResult.missing`; nested paths raise
@@ -198,8 +204,12 @@ behaviors:
 GraphQL has its own 5000 points/hour budget (separate from REST), at
 roughly one point per repo per ref connection. A full heads+tags probe
 of 1500 repos costs ≈ 3000 points — callers should watch
-`BatchRepoRefsResult.rate_limit_remaining` (GraphQL
-`rateLimit.remaining`) and warn when the budget runs low.
+`BatchRepoRefsResult.rate_limit_cost`,
+`BatchRepoRefsResult.rate_limit_remaining`, and
+`BatchRepoRefsResult.rate_limit_reset_at` from GraphQL `rateLimit`.
+`rate_limit_cost` is summed across every POST in the probe operation;
+`remaining` and `reset_at` come from the latest response. Callers should
+warn or stop when the budget runs low.
 
 ## Rate Limiting
 

@@ -53,12 +53,14 @@ def _payload(
     repos: dict[str, Any],
     *,
     errors: list[dict[str, Any]] | None = None,
+    cost: int = 1,
     remaining: int = 4999,
+    reset_at: str = "2026-06-10T00:00:00Z",
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "data": {
             **repos,
-            "rateLimit": {"cost": 1, "remaining": remaining, "resetAt": "2026-06-10T00:00:00Z"},
+            "rateLimit": {"cost": cost, "remaining": remaining, "resetAt": reset_at},
         }
     }
     if errors is not None:
@@ -107,6 +109,7 @@ def test_batch_repo_refs_returns_refs_default_branch_and_rate_limit() -> None:
                             tags=_connection([]),
                         ),
                     },
+                    cost=7,
                     remaining=4998,
                 ),
             )
@@ -128,11 +131,123 @@ def test_batch_repo_refs_returns_refs_default_branch_and_rate_limit() -> None:
     assert empty.default_branch is None
     assert empty.refs == ()
     assert result.missing == ()
+    assert result.rate_limit_cost == 7
     assert result.rate_limit_remaining == 4998
+    assert result.rate_limit_reset_at is not None
+    assert result.rate_limit_reset_at.isoformat() == "2026-06-10T00:00:00+00:00"
     query = _query(route)
     assert 'r0: repository(owner: "acme", name: "site")' in query
     assert 'r1: repository(owner: "acme", name: "empty")' in query
     assert "rateLimit { cost remaining resetAt }" in query
+
+
+def test_batch_repo_refs_sums_rate_limit_cost_and_keeps_latest_remaining_and_reset() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {"r0": _repo_node("acme/a", heads=_connection([]), tags=_connection([]))},
+                        cost=2,
+                        remaining=4998,
+                        reset_at="2026-06-10T00:00:00Z",
+                    ),
+                ),
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {"r0": _repo_node("acme/b", heads=_connection([]), tags=_connection([]))},
+                        cost=3,
+                        remaining=4995,
+                        reset_at="2026-06-10T01:00:00Z",
+                    ),
+                ),
+            ]
+        )
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/a", "acme/b"], chunk_size=1)
+
+    assert result.rate_limit_cost == 5
+    assert result.rate_limit_remaining == 4995
+    assert result.rate_limit_reset_at is not None
+    assert result.rate_limit_reset_at.isoformat() == "2026-06-10T01:00:00+00:00"
+
+
+def test_batch_repo_refs_includes_ref_pagination_cost_in_total() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {
+                            "r0": _repo_node(
+                                "acme/site",
+                                heads=_connection(
+                                    [_ref_node("main", {"oid": "c1"})],
+                                    has_next=True,
+                                    end_cursor="CUR",
+                                ),
+                            )
+                        },
+                        cost=2,
+                        remaining=4998,
+                    ),
+                ),
+                httpx.Response(
+                    200,
+                    json=_payload(
+                        {"r0": {"heads": _connection([_ref_node("dev", {"oid": "c2"})])}},
+                        cost=1,
+                        remaining=4997,
+                    ),
+                ),
+            ]
+        )
+        with _client() as client:
+            result = client.batch_repo_refs(["acme/site"], kinds=("heads",))
+
+    assert result.rate_limit_cost == 3
+    assert result.rate_limit_remaining == 4997
+
+
+def test_batch_default_branch_refs_uses_connection_free_query_and_synthesizes_head_ref() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        route = mock.post("/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json=_payload(
+                    {
+                        "r0": {
+                            "nameWithOwner": "acme/site",
+                            "defaultBranchRef": {"name": "trunk", "target": {"oid": "c1"}},
+                        },
+                        "r1": {
+                            "nameWithOwner": "acme/empty",
+                            "defaultBranchRef": None,
+                        },
+                    },
+                    cost=1,
+                    remaining=4999,
+                ),
+            )
+        )
+        with _client() as client:
+            result = client.batch_default_branch_refs(["acme/site", "acme/empty"])
+
+    assert route.call_count == 1
+    query = _query(route)
+    assert "defaultBranchRef" in query
+    assert "refs(" not in query
+    site, empty = result.repos
+    assert site.full_name == "acme/site"
+    assert site.default_branch == "trunk"
+    assert [(ref.kind, ref.name, ref.sha) for ref in site.refs] == [("heads", "trunk", "c1")]
+    assert empty.full_name == "acme/empty"
+    assert empty.default_branch is None
+    assert empty.refs == ()
+    assert result.rate_limit_cost == 1
 
 
 def test_batch_repo_refs_chunks_requests_by_chunk_size() -> None:

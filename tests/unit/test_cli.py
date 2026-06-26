@@ -47,7 +47,12 @@ def test_root_package_public_surface_is_slim() -> None:
         "GithubSettings",
         "RepoRef",
         "RepoRefs",
+        "RepositoryInventoryItem",
+        "RepositoryInventoryScope",
+        "ResolveRepositoryInventory",
+        "TeamScope",
         "app",
+        "normalize_team_scopes",
     ]
     assert "ScopedQueryBase" not in untaped_github.domain.__all__
 
