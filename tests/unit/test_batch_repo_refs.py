@@ -398,6 +398,30 @@ def test_batch_repo_refs_raises_unknown_graphql_error() -> None:
     assert "GraphQL blew up" in str(exc_info.value)
 
 
+def test_batch_repo_refs_raises_forbidden_for_nested_graphql_error_path() -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(
+            return_value=httpx.Response(
+                200,
+                json=_payload(
+                    {"r0": None},
+                    errors=[
+                        {
+                            "type": "FORBIDDEN",
+                            "path": ["r0", "refs"],
+                            "message": "Resource not accessible by personal access token",
+                        }
+                    ],
+                ),
+            )
+        )
+        with _client() as client, pytest.raises(GithubGraphqlError) as exc_info:
+            client.batch_repo_refs(["acme/site"])
+
+    assert exc_info.value.kind == "forbidden"
+    assert "Resource not accessible" in str(exc_info.value)
+
+
 def test_batch_repo_refs_raises_on_null_repo_without_error() -> None:
     with respx.mock(base_url="https://api.github.com") as mock:
         mock.post("/graphql").mock(return_value=httpx.Response(200, json=_payload({"r0": None})))
@@ -561,6 +585,40 @@ def test_batch_repo_refs_classifies_graphql_http_access_errors(
     assert message in str(exc_info.value)
     assert exc_info.value.status_code == response.status_code
     assert exc_info.value.body
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            {"message": "Resource not accessible by personal access token"},
+            "Resource not accessible by personal access token",
+        ),
+        (
+            {"error": "Resource not accessible by personal access token"},
+            "Resource not accessible by personal access token",
+        ),
+        (
+            {"detail": "Resource not accessible by personal access token"},
+            "Resource not accessible by personal access token",
+        ),
+        (
+            {"errors": [{"message": "Resource not accessible by personal access token"}]},
+            "Resource not accessible by personal access token",
+        ),
+    ],
+)
+def test_batch_repo_refs_extracts_graphql_http_error_messages_from_common_shapes(
+    body: dict[str, object],
+    message: str,
+) -> None:
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.post("/graphql").mock(return_value=httpx.Response(403, json=body))
+        with _client() as client, pytest.raises(GithubGraphqlError) as exc_info:
+            client.batch_repo_refs(["acme/a"])
+
+    assert exc_info.value.kind == "forbidden"
+    assert str(exc_info.value) == f"github graphql access forbidden: {message}"
 
 
 @pytest.mark.parametrize("bad", ["site", "acme/", "/site", "acme/site/extra", ""])
