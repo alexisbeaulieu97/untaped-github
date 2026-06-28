@@ -10,7 +10,7 @@ untaped tool ships.
 ## Install
 
 ```bash
-uv tool install untaped-github
+uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git
 ```
 
 ## Configure
