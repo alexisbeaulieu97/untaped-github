@@ -1,6 +1,6 @@
 [project]
 name = "untaped-github"
-version = "0.12.1"
+version = "0.12.2"
 description = "GitHub user and search CLI built on the untaped SDK."
 authors = [
     { name = "Alexis Beaulieu", email = "alexisbeaulieu97@gmail.com" }
@@ -9,7 +9,7 @@ requires-python = ">=3.14"
 dependencies = [
     "cyclopts>=4.16.0,<5",
     "pydantic>=2.13.3",
-    "untaped",
+    "untaped>=2.4.0,<3",
 ]
 
 [project.scripts]
@@ -104,4 +104,4 @@ exclude_also = [
 ]
 
 [tool.uv.sources]
-untaped = { git = "https://github.com/alexisbeaulieu97/untaped.git", rev = "v2.2.0" }
+untaped = { git = "https://github.com/alexisbeaulieu97/untaped.git", rev = "v2.4.0" }
