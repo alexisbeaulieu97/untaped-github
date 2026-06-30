@@ -10,7 +10,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 ## Setup
 
 - `untaped-github` is a standalone CLI built on the untaped SDK. Install it with `uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git`.
-- Settings live under `profiles.<name>.github`: `base_url` and `token`.
+- Settings live under `profiles.<name>.github`: `base_url`, `token`, and `corpus_path`.
 - `base_url` defaults to `https://api.github.com`; GitHub Enterprise Server usually uses `https://HOST/api/v3`.
 - Set the token with `untaped-github config set token --prompt` or `--stdin` (a bare key addresses this tool's own section).
 - Set the base URL with `untaped-github config set base_url https://HOST/api/v3`.
@@ -19,6 +19,9 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 
 - `untaped-github whoami` verifies the authenticated token and returns the current user — a single entity, so it renders as a vertical detail view under `--format table` and a bare JSON object (`{…}`) under `--format json`.
 - `untaped-github repos list [PATTERN] [--org ORG]... [--team ORG/SLUG|SLUG]...` lists complete org/team repository inventory from GitHub list APIs with at least one repeatable scope.
+- `untaped-github scan sync --org ORG|--team ORG/SLUG|--repo OWNER/NAME` refreshes the local scan corpus with each repo's current default branch.
+- `untaped-github scan grep PATTERN --org ORG|--team ORG/SLUG|--repo OWNER/NAME [--sync]` runs local `git grep` over cached default branches and emits `github.codehit` rows.
+- `untaped-github scan list`, `scan clean --repo OWNER/NAME`, `scan clean --all --yes`, and `scan worktree OWNER/NAME` inspect/prune/materialize the managed corpus.
 - `untaped-github search repos` searches repositories.
 - `untaped-github search code` searches code and does not support sort.
 - `untaped-github search issues` searches issues and pull requests.
@@ -29,6 +32,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 - `repos list` treats `--org` and `--team` as additive scopes: `--team acme/backend` is team-only, while `--org acme --team backend` includes the whole org plus that team.
 - In `repos list`, `PATTERN` is a case-insensitive whole-target glob by default; `--regex` switches it to a case-insensitive, unanchored regex substring match. Patterns with `/` match `full_name`, otherwise they match repo `name`.
 - Use `repos list --no-archived --no-fork --format raw --columns ssh_url` to produce cloneable URL lines for `untaped-workspace add --stdin`.
+- Use `scan grep --sync` instead of GitHub `search code` for repeated team-wide code scans that would otherwise hit Search API rate limits.
 
 ## Client API Notes
 
@@ -41,6 +45,12 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 
 - Prefer `--format json` for structured search results.
 - Prefer `repos list` over `search repos` when the user needs complete org/team inventory or local glob/regex matching.
+- Prefer `scan grep PATTERN --team ORG/SLUG --sync` for broad repeated code scans. It expands scopes with REST inventory but does not call GitHub Search APIs.
+- `scan grep` is default-branch-only in v1 and uses local `git grep -I`, not ripgrep, so binary files are skipped. It emits `repo`, `ref`, `path`, `line`, `column`, and `text`; `column` is the first match on the line.
+- `scan grep` treats `git grep` exit `1` as a successful no-match. Exit codes above `1` are per-repo failures; successful repo hits are still emitted and the overall command exits non-zero if any repo failed.
+- The scan corpus lives under `github.corpus_path` (default `~/.untaped/github-corpus`) and is managed by `untaped-github`. Use `scan worktree OWNER/NAME` for a one-off checkout path; it reads cached metadata locally and only materializes refs already present in the corpus. Use `untaped-workspace` for human development workspaces.
+- `scan clean` requires either `--repo OWNER/NAME` or `--all --yes`; it also removes managed worktrees for cleaned repos.
+- Scan commands shell out to `git`; Git must be installed and available on `PATH`.
 - Use `--format pipe` to chain a search into another untaped tool: each
   record is tagged (`github.repo`/`github.code`/...), and `--repo-stdin` reads a
   `--format pipe` stream back (mapping `full_name`) as well as bare `owner/name`

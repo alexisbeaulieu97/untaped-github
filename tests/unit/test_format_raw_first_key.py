@@ -9,12 +9,15 @@ import pytest
 from pydantic import BaseModel
 
 from untaped_github.domain.models import (
+    CodeHitResult,
     CodeResult,
+    CorpusRepoResult,
     GithubUser,
     IssueResult,
     RepoListResult,
     RepoResult,
     UserResult,
+    WorktreeResult,
 )
 
 PYDANTIC_ROW_SOURCES: dict[type[BaseModel], str] = {
@@ -24,6 +27,9 @@ PYDANTIC_ROW_SOURCES: dict[type[BaseModel], str] = {
     IssueResult: "repo",
     UserResult: "id",
     CodeResult: "name",
+    CodeHitResult: "repo",
+    CorpusRepoResult: "repo",
+    WorktreeResult: "repo",
 }
 
 _NOT_ROW_SOURCES_BY_MODULE: dict[str, frozenset[str]] = {

@@ -2,9 +2,10 @@
 
 `untaped-github` is a standalone CLI, built on the
 [`untaped`](https://github.com/alexisbeaulieu97/untaped) SDK, that inspects
-the authenticated user, lists complete org/team repository inventory, and
-searches GitHub for repositories, code, issues/PRs, and users/orgs. All
-commands authenticate with the token from the tool's `token` setting.
+the authenticated user, lists complete org/team repository inventory, searches
+GitHub for repositories, code, issues/PRs, and users/orgs, and keeps a local
+Git corpus for repeated team-wide code scans. Commands that talk to GitHub
+authenticate with the token from the tool's `token` setting.
 Scoped search commands default to the authenticated user, so bare scoped
 searches answer "what's mine?".
 
@@ -29,6 +30,13 @@ use the API path:
 
 ```bash
 untaped-github config set base_url https://github.example.com/api/v3
+```
+
+The local scan corpus defaults to `~/.untaped/github-corpus` and can be
+changed with:
+
+```bash
+untaped-github config set corpus_path ~/.cache/untaped-github/corpus
 ```
 
 ## Commands
@@ -124,6 +132,75 @@ field sets differ; `full_name` is the shared stable identifier.
 pattern and boolean filters do not reduce GitHub page count; the command
 fetches the selected org/team scopes to exhaustion before filtering. Server
 side list parameters, caching, and a debugging limit are deferred.
+
+### `scan`
+
+`untaped-github scan` is for repeatable local code scans over org/team/repo
+inventory. It deliberately avoids GitHub Search APIs. Scoped scan commands
+still use normal REST inventory endpoints to expand `--org`, `--team`, and
+`--repo`, but the code search itself runs locally over a managed bare Git
+corpus. The scanner shells out to `git`; Git must be available on `PATH`.
+
+```bash
+untaped-github scan sync --team acme/backend
+untaped-github scan grep 'uses: acme/action' --team acme/backend --sync
+untaped-github scan grep 'BaseModel' --org acme --path pyproject.toml
+untaped-github scan list
+untaped-github scan worktree acme/api --format raw --columns path
+untaped-github scan clean --repo acme/api
+untaped-github scan clean --all --yes
+```
+
+`scan sync` clones or refreshes each repository's current default branch into
+the local corpus. The corpus is a managed set of bare repositories under
+`github.corpus_path`, defaulting to `~/.untaped/github-corpus`. Fetches are
+shallow by default (`--depth 1`) and blobful: unlike Ansible's dependency
+index refresh, scan needs blobs locally so `git grep <ref>` can run without
+lazy network fetches.
+
+`scan grep PATTERN` runs `git grep` against cached default branches. It uses
+the corpus as-is by default. Pass `--sync` to refresh matching scopes before
+searching; without `--sync`, missing cached repos fail with an actionable
+message. A no-match repository is not a failure: `git grep` exit code `1`
+means success with zero hits, while exit codes above `1` are reported as
+per-repo failures. Binary files are skipped with `git grep -I`; scan output is
+line-oriented text intended for code review and follow-up shell tools.
+
+Supported grep filters are intentionally small in v1:
+
+| Flag | Effect |
+| ---- | ------ |
+| `--path PATH` | Git pathspec to scan; repeatable. |
+| `--glob GLOB` | Git glob pathspec to scan; repeatable. |
+| `--ignore-case`/`-i` | Case-insensitive matching. |
+| `--fixed-strings`/`-F` | Treat pattern as a literal string. |
+| `--word-regexp`/`-w` | Match only whole words. |
+| `--parallel`/`-j` | Parallel Git workers, capped at 32. |
+
+`scan grep` emits `github.codehit` pipe records with stable fields:
+`repo`, `ref`, `path`, `line`, `column`, and `text`. `column` is the first
+match on the matching line. V1 does not emit a separate `match` substring
+because `git grep` cannot reliably provide substring, full line, line number,
+and column together in one invocation.
+
+`scan worktree REPO` materializes one cached repo/ref into a managed worktree
+and prints its path, which is the escape hatch for editor workflows or manual
+`rg`. Worktree resolution is local-corpus backed and does not need a REST
+inventory lookup after sync. In v1, `scan sync` fetches default branches; a
+custom `--ref` only works when that ref is already present in the local corpus,
+otherwise the command fails with a cached-ref message. Bulk human development
+workspaces remain the job of `untaped-workspace`; the scan corpus is optimized
+for local scans, not active development.
+
+`scan list` and `scan clean` inspect and prune the managed corpus. `scan clean`
+requires either `--repo OWNER/NAME` or `--all --yes`, removes associated
+managed worktrees before deleting a bare repo, and only removes paths under the
+configured corpus root. `scan list` skips corrupt cache metadata with a warning
+so healthy cache entries remain visible.
+
+V1 sync is default-branch-only and authenticated Git transport is HTTPS-only.
+All-branch/tag scans, SSH transport, ripgrep-native structured scanning, and
+sharing the corpus adapter with `untaped-ansible` are future work.
 
 ### `search`
 
