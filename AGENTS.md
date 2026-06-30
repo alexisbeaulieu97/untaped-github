@@ -336,12 +336,31 @@ team slug normalizes to that org. CLI parsing turns team values into
 `TeamScope(org, slug)` objects, then the use case calls
 `GET /orgs/{org}/teams/{slug}/repos` and expands the result into the same
 parenthesized OR repo group used by explicit repeated `--repo` flags. The
-use case bounds each team at `MAX_TEAM_REPO_QUALIFIERS + 1` with
-`itertools.islice`; if the cap is exceeded, keep the first N and emit a
-stderr warning through the injected `warn` callback. Keep the cap
-conservative: the generated OR group expands quickly under GitHub's search
-query length budget, and users can pass explicit `--repo` scopes when they
-intentionally want a wider query.
+repository-search use case resolves team repositories to completion and
+dedupes them with explicit `--repo` scopes, preserving first-seen order. It
+then splits the repo scopes into multiple `/search/repositories` calls using
+GitHub's search validation constraints: at most five boolean operators per
+query and at most 256 user query-text characters, excluding generated
+qualifiers/operators and unquoted supported raw qualifiers. Quoted terms
+always count as literal query text, so quoted `AND`/`OR`/`NOT` tokens do not
+reduce the generated repo batch budget. With no user-supplied boolean
+operators this means up to six generated repo qualifiers per batch;
+user-supplied unquoted `AND`/`OR`/`NOT` tokens reduce that budget, and more
+than five user boolean operators fail before any HTTP request.
+
+Repository-search rows are deduped by `full_name`. For the default best-match
+order and `--sort help-wanted-issues`, the use case stops querying batches as
+soon as it has enough unique rows for `--limit`, so selection is still
+batch-order dependent. Multi-batch `--sort help-wanted-issues` searches emit
+a warning because GitHub applies that sort per request. For `--sort stars`,
+`--sort forks`, and `--sort updated`, every batch is queried and results are
+locally merge-sorted before the final `--limit` slice; ties sort by
+`full_name`.
+
+`search code` and `search issues` still use the conservative
+`MAX_TEAM_REPO_QUALIFIERS` per-team cap and warning behavior. Do not reuse the
+repository-search batching behavior for those endpoints without endpoint-
+specific tests for ordering, limits, and GitHub validation behavior.
 
 `--repo-stdin` reads repo scopes with the SDK's
 `read_identifiers([], stdin=True, id_field="full_name")` and appends them to

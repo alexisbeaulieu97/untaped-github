@@ -214,6 +214,142 @@ def test_search_repos_team_resolution(tmp_path: Path, monkeypatch: pytest.Monkey
     assert sent_q == "(repo:acme/api OR repo:acme/web)"
 
 
+def test_search_repos_batches_team_scopes_by_search_constraints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    team_repos = [
+        {"full_name": (f"Desjardins/infrasinteroutils-gha-actions-commun-intergiciel-repo{i}")}
+        for i in range(8)
+    ]
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/Desjardins/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=team_repos)
+        )
+        search_route = mock.get("/search/repositories").mock(
+            return_value=httpx.Response(200, json={"items": []})
+        )
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "uses: "
+                "Desjardins/infrasinteroutils-gha-actions-commun-intergiciel"
+                "/.github/actions/set-constants-url",
+                "--team",
+                "Desjardins/backend",
+                "--archived",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    queries = [call.request.url.params["q"] for call in search_route.calls]
+    assert len(queries) > 1
+    assert sum(q.count("repo:") for q in queries) == len(team_repos)
+    assert all(q.count("repo:") <= 6 for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
+    assert all("archived:true" in q for q in queries)
+
+
+def test_search_repos_batches_short_team_scopes_by_operator_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    team_repos = [{"full_name": f"acme/r{i}"} for i in range(13)]
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=team_repos)
+        )
+        search_route = mock.get("/search/repositories").mock(
+            return_value=httpx.Response(200, json={"items": []})
+        )
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "uses: acme/action",
+                "--team",
+                "acme/backend",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    queries = [call.request.url.params["q"] for call in search_route.calls]
+    assert len(queries) == 3
+    assert sum(q.count("repo:") for q in queries) == len(team_repos)
+    assert all(q.count("repo:") <= 6 for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
+
+
+def test_search_repos_oversized_raw_query_fails_before_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
+        search_route = mock.get("/search/repositories").mock(
+            return_value=httpx.Response(200, json={"items": []})
+        )
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "x" * 257,
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert search_route.call_count == 0
+    assert "query text length" in result.stderr
+    assert "256" in result.stderr
+    assert "narrow" in result.stderr
+
+
+def test_search_repos_422_reports_query_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/search/repositories").mock(
+            return_value=httpx.Response(
+                422,
+                json={
+                    "message": "Validation Failed",
+                    "errors": [{"message": "The search query is invalid"}],
+                },
+            )
+        )
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "uses: acme/reusable/.github/actions/build",
+                "--repo",
+                "acme/api",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert "/search/repositories" in result.stderr
+    assert "query text length" in result.stderr
+    assert "Validation Failed" in result.stderr
+
+
 def test_search_code_accepts_org_qualified_team_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

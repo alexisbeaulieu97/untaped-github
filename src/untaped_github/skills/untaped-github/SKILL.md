@@ -54,3 +54,12 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 - Use `--limit` intentionally; GitHub search has stricter rate limits than normal REST reads.
 - When no repo/org/user/team scope is passed to repo/code/issue search, the CLI defaults to the authenticated user.
 - Repeated repo scopes are ORed together; do not rewrite them as separate AND qualifiers.
+- `search repos` automatically batches large team-expanded repo scopes around
+  GitHub's search validation limits: at most five `AND`/`OR`/`NOT` operators
+  and 256 user query-text characters per request, excluding generated
+  qualifiers/operators and unquoted supported raw qualifiers. Quoted terms
+  count as literal query text and quoted boolean-looking tokens do not reduce
+  the repo batch budget. Results are deduped by `full_name`; best-match and
+  `help-wanted-issues` stop once `--limit` unique rows are available. Multi-batch
+  `help-wanted-issues` emits a warning, while `stars`, `forks`, and
+  `updated` query all batches and locally merge-sort before the final limit.
