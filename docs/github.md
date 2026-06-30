@@ -161,12 +161,18 @@ also remains a search qualifier, so `--org acme --team backend` searches
 within the repos resolved from `acme/backend` under the `org:acme` qualifier.
 
 For `search repos`, team-resolved and explicit repo scopes are deduped and
-automatically split across multiple `/search/repositories` requests when one
-generated OR query would exceed GitHub's query-length validation. The final
-rows are deduped by `full_name` and `--limit` is applied after all batches.
-Batching prevents oversized team searches from failing with 422, but sorted
-or best-match results are ordered per batch rather than as one global GitHub
-ranking.
+automatically split across multiple `/search/repositories` requests to stay
+within GitHub's search validation limits: at most five `AND`/`OR`/`NOT`
+operators per query and at most 256 user query-text characters, excluding
+generated qualifiers/operators. With no user boolean operators, each generated
+repo batch contains at most six repos; user boolean operators reduce that
+repo budget.
+
+The final rows are deduped by `full_name`. Default best-match searches and
+`--sort help-wanted-issues` stop once enough unique rows are available for
+`--limit`, so selection remains batch-order dependent. `--sort stars`,
+`--sort forks`, and `--sort updated` query every batch and locally merge-sort
+the combined results before applying the final `--limit`.
 
 Repository-specific: `--name`, `--language`, `--archived/--no-archived`,
 `--fork/--no-fork`, `--visibility public|private`, `--sort stars|forks|updated`.

@@ -81,14 +81,41 @@ def _teams(stub: _StubTeams) -> GithubTeamService:
     return cast(GithubTeamService, stub)
 
 
-def _repo_row(full_name: str, *, id_: int) -> dict[str, Any]:
+def _repo_row(
+    full_name: str,
+    *,
+    id_: int,
+    stargazers_count: int = 0,
+    forks_count: int = 0,
+    updated_at: str | None = None,
+) -> dict[str, Any]:
     owner, _, name = full_name.partition("/")
     return {
         "id": id_,
         "name": name or owner,
         "full_name": full_name,
         "html_url": f"https://github.com/{full_name}",
+        "stargazers_count": stargazers_count,
+        "forks_count": forks_count,
+        "updated_at": updated_at,
     }
+
+
+class _QueuedSearch(_StubSearch):
+    """Returns one queued page per search call and honors the provided limit."""
+
+    def __init__(self, rows_by_call: list[list[dict[str, Any]]]) -> None:
+        super().__init__([])
+        self._rows_by_call = rows_by_call
+
+    def _record(
+        self, endpoint: str, q: str, *, sort: str | None, limit: int | None
+    ) -> Iterator[dict[str, Any]]:
+        self.calls.append((endpoint, q, sort, limit))
+        rows = self._rows_by_call[len(self.calls) - 1]
+        if limit is not None:
+            rows = rows[:limit]
+        return iter(rows)
 
 
 # --- SearchRepos --------------------------------------------------------
@@ -204,10 +231,77 @@ def test_search_repos_batches_oversized_team_without_truncating() -> None:
     queries = [call[1] for call in search.calls]
     assert len(queries) > 1
     assert sum(q.count("repo:") for q in queries) == len(big)
-    assert all(len(q) <= 256 for q in queries)
+    assert all(q.count("repo:") <= MAX_TEAM_REPO_QUALIFIERS for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
 
 
-def test_search_repos_batches_multiple_teams_by_total_query_budget() -> None:
+def test_search_repos_batches_short_names_by_boolean_operator_limit() -> None:
+    repos = [{"full_name": f"acme/r{i}"} for i in range(13)]
+    teams = _StubTeams(repos)
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(teams))
+
+    list(
+        use_case(
+            RepoSearchFilters(raw_query="uses: acme/action"),
+            team_scopes=(TeamScope("acme", "short"),),
+        )
+    )
+
+    queries = [call[1] for call in search.calls]
+    assert len(queries) == 3
+    assert sum(q.count("repo:") for q in queries) == len(repos)
+    assert all(q.count("repo:") <= MAX_TEAM_REPO_QUALIFIERS for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
+
+
+def test_search_repos_user_boolean_operators_reduce_repo_batch_budget() -> None:
+    repos = [{"full_name": f"acme/r{i}"} for i in range(7)]
+    teams = _StubTeams(repos)
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(teams))
+
+    list(
+        use_case(
+            RepoSearchFilters(raw_query="alpha OR beta"),
+            team_scopes=(TeamScope("acme", "ops"),),
+        )
+    )
+
+    queries = [call[1] for call in search.calls]
+    assert len(queries) == 2
+    assert sum(q.count("repo:") for q in queries) == len(repos)
+    assert all(q.count("repo:") <= 5 for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
+
+
+def test_search_repos_rejects_raw_query_with_too_many_boolean_operators() -> None:
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
+
+    with pytest.raises(UntapedError) as exc_info:
+        list(use_case(RepoSearchFilters(raw_query="a OR b OR c OR d OR e OR f OR g")))
+
+    assert "boolean operators" in str(exc_info.value)
+    assert "5" in str(exc_info.value)
+    assert search.calls == []
+
+
+def test_search_repos_rejects_raw_query_text_over_256_before_search() -> None:
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
+
+    list(use_case(RepoSearchFilters(raw_query="x" * 256)))
+
+    with pytest.raises(UntapedError) as exc_info:
+        list(use_case(RepoSearchFilters(raw_query="x" * 257)))
+
+    assert "query text length" in str(exc_info.value)
+    assert "256" in str(exc_info.value)
+    assert len(search.calls) == 1
+
+
+def test_search_repos_batches_multiple_teams_by_search_constraints() -> None:
     teams = _StubTeams(
         repos_by_team={
             ("Desjardins", f"team{i}"): [
@@ -242,67 +336,108 @@ def test_search_repos_batches_multiple_teams_by_total_query_budget() -> None:
     queries = [call[1] for call in search.calls]
     assert len(queries) > 1
     assert sum(q.count("repo:") for q in queries) == 21
-    assert all(len(q) <= 256 for q in queries)
+    assert all(q.count("repo:") <= MAX_TEAM_REPO_QUALIFIERS for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
     assert all("archived:true" in q for q in queries)
 
 
 def test_search_repos_dedupes_across_batches_then_applies_limit() -> None:
-    class BatchSearch(_StubSearch):
-        def __init__(self) -> None:
-            super().__init__([])
-            self._rows_by_call = [
-                [_repo_row("acme/api", id_=1), _repo_row("acme/web", id_=2)],
-                [_repo_row("acme/api", id_=1), _repo_row("acme/worker", id_=3)],
-            ]
-
-        def _record(
-            self, endpoint: str, q: str, *, sort: str | None, limit: int | None
-        ) -> Iterator[dict[str, Any]]:
-            self.calls.append((endpoint, q, sort, limit))
-            return iter(self._rows_by_call[len(self.calls) - 1])
-
-    repos = [
-        {"full_name": (f"Desjardins/infrasinteroutils-gha-actions-commun-intergiciel-{i}")}
-        for i in range(2)
-    ]
-    search = BatchSearch()
+    repos = [{"full_name": f"acme/r{i}"} for i in range(7)]
+    search = _QueuedSearch(
+        [
+            [_repo_row("acme/api", id_=1), _repo_row("acme/web", id_=2)],
+            [
+                _repo_row("acme/api", id_=1),
+                _repo_row("acme/worker", id_=3),
+                _repo_row("acme/extra", id_=4),
+            ],
+        ]
+    )
     use_case = SearchRepos(_stub(search), _teams(_StubTeams(repos)))
 
     rows = list(
         use_case(
             RepoSearchFilters(
                 raw_query="x" * 150,
-                limit=2,
+                limit=3,
             ),
             team_scopes=(TeamScope("Desjardins", "huge"),),
         )
     )
 
-    assert [row.full_name for row in rows] == ["acme/api", "acme/web"]
+    assert [row.full_name for row in rows] == ["acme/api", "acme/web", "acme/worker"]
     assert len(search.calls) == 2
+    assert [call[3] for call in search.calls] == [3, 3]
 
 
-def test_search_repos_fails_before_search_when_single_repo_query_exceeds_budget() -> None:
-    search = _StubSearch([])
-    use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
+@pytest.mark.parametrize(
+    ("sort", "rows_by_call", "expected"),
+    [
+        (
+            "stars",
+            [
+                [
+                    _repo_row("acme/a", id_=1, stargazers_count=3),
+                    _repo_row("acme/b", id_=2, stargazers_count=3),
+                    _repo_row("acme/c", id_=3, stargazers_count=1),
+                ],
+                [_repo_row("acme/z", id_=4, stargazers_count=10)],
+            ],
+            ["acme/z", "acme/a", "acme/b"],
+        ),
+        (
+            "forks",
+            [
+                [
+                    _repo_row("acme/a", id_=1, forks_count=3),
+                    _repo_row("acme/b", id_=2, forks_count=3),
+                    _repo_row("acme/c", id_=3, forks_count=1),
+                ],
+                [_repo_row("acme/z", id_=4, forks_count=10)],
+            ],
+            ["acme/z", "acme/a", "acme/b"],
+        ),
+        (
+            "updated",
+            [
+                [
+                    _repo_row("acme/a", id_=1, updated_at=None),
+                    _repo_row("acme/b", id_=2, updated_at="2024-01-01T00:00:00Z"),
+                    _repo_row("acme/c", id_=3, updated_at="2026-01-01T00:00:00Z"),
+                ],
+                [_repo_row("acme/z", id_=4, updated_at="2025-01-01T00:00:00Z")],
+            ],
+            ["acme/c", "acme/z", "acme/b"],
+        ),
+    ],
+)
+def test_search_repos_sorted_batches_are_globally_sorted(
+    sort: str,
+    rows_by_call: list[list[dict[str, Any]]],
+    expected: list[str],
+) -> None:
+    repos = [{"full_name": f"acme/r{i}"} for i in range(7)]
+    search = _QueuedSearch(rows_by_call)
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams(repos)))
 
-    with pytest.raises(UntapedError) as exc_info:
-        list(
-            use_case(
-                RepoSearchFilters(
-                    raw_query="x" * 245,
-                    repos=("Desjardins/infrasinteroutils-gha-actions-commun-intergiciel",),
-                )
-            )
+    rows = list(
+        use_case(
+            RepoSearchFilters(
+                raw_query="uses: acme/action",
+                sort=sort,  # type: ignore[arg-type]
+                limit=3,
+            ),
+            team_scopes=(TeamScope("acme", "ops"),),
         )
+    )
 
-    assert "query length" in str(exc_info.value)
-    assert "256" in str(exc_info.value)
-    assert "narrow" in str(exc_info.value)
-    assert search.calls == []
+    assert [row.full_name for row in rows] == expected
+    assert len(search.calls) == 2
+    assert [call[2] for call in search.calls] == [sort, sort]
+    assert [call[3] for call in search.calls] == [3, 3]
 
 
-def test_search_repos_422_error_reports_endpoint_and_query_length() -> None:
+def test_search_repos_422_error_preserves_http_error_metadata() -> None:
     class FailingSearch(_StubSearch):
         def search_repositories(
             self, q: str, *, sort: str | None = None, limit: int | None = None
@@ -321,14 +456,36 @@ def test_search_repos_422_error_reports_endpoint_and_query_length() -> None:
     search = FailingSearch([])
     use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
 
-    with pytest.raises(UntapedError) as exc_info:
+    with pytest.raises(HttpStatusError) as exc_info:
         list(use_case(RepoSearchFilters(raw_query="x", repos=("acme/api",))))
 
     message = str(exc_info.value)
     assert "/search/repositories" in message
-    assert "query length" in message
-    assert "Validation Failed" in message
-    assert "The search query is invalid" in message
+    assert "query text length" in message
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.url == "https://api.github.com/search/repositories?q=x"
+    assert exc_info.value.body is not None
+    assert "Validation Failed" in exc_info.value.body
+
+
+def test_search_code_truncates_oversized_team_with_warning() -> None:
+    big = [{"full_name": f"acme/repo{i}"} for i in range(MAX_TEAM_REPO_QUALIFIERS + 5)]
+    teams = _StubTeams(big)
+    search = _StubSearch([])
+    warnings: list[str] = []
+    use_case = SearchCode(_stub(search), _teams(teams), warn=warnings.append)
+
+    list(
+        use_case(
+            CodeSearchFilters(raw_query="TODO"),
+            team_scopes=(TeamScope("acme", "huge"),),
+        )
+    )
+
+    assert any("truncating" in w for w in warnings)
+    q = search.calls[0][1]
+    assert q.count("repo:") == MAX_TEAM_REPO_QUALIFIERS
+    assert q.count(" OR ") == MAX_TEAM_REPO_QUALIFIERS - 1
 
 
 def test_search_repos_validates_results_into_domain_model() -> None:

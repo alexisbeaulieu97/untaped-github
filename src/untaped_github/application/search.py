@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import re
 from collections.abc import Callable, Iterator
 from itertools import islice
 from typing import Any
@@ -27,10 +27,14 @@ from untaped_github.domain.queries import ScopedQueryBase
 WarnFn = Callable[[str], None]
 
 # Code and issue search still keep generated team OR groups small. Repository
-# search resolves full teams and splits requests by the decoded q-length budget.
+# search resolves full teams and splits requests by GitHub's search validation
+# limits: 256 user query characters and at most five boolean operators.
 MAX_TEAM_REPO_QUALIFIERS = 6
-MAX_SEARCH_QUERY_Q_LENGTH = 256
+MAX_SEARCH_QUERY_TEXT_LENGTH = 256
+MAX_SEARCH_BOOLEAN_OPERATORS = 5
 _REPOSITORY_SEARCH_ENDPOINT = "/search/repositories"
+_BOOLEAN_OPERATOR_RE = re.compile(r"(?<!\S)(?:AND|OR|NOT)(?!\S)")
+_GLOBAL_REPO_SORTS = {"stars", "forks", "updated"}
 
 
 def _noop(_: str) -> None:
@@ -62,7 +66,7 @@ def _resolve_team_repos(
         if max_repos_per_team is not None and len(repos) > max_repos_per_team:
             warn(
                 f"team {scope.org}/{scope.slug} has more than {max_repos_per_team} repos; "
-                "truncating to stay under GitHub's query length limit"
+                "truncating to stay under GitHub's search operator limit"
             )
             repos = repos[:max_repos_per_team]
         all_repos.extend(repos)
@@ -92,80 +96,88 @@ def _dedupe_repos(repos: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _repo_search_batches(filters: RepoSearchFilters) -> tuple[RepoSearchFilters, ...]:
-    """Split repository search filters into decoded-q-length-safe batches."""
-    repos = _dedupe_repos(filters.repos)
+    """Split repository search filters into GitHub-validation-safe batches."""
+    _ensure_search_query_fits(filters)
+    user_operators = _ensure_search_boolean_operators_fit(filters)
+    repos = filters.repos
     if not repos:
-        _ensure_search_query_fits(filters.to_query_string())
         return (filters,)
 
+    max_repos_per_batch = MAX_SEARCH_BOOLEAN_OPERATORS - user_operators + 1
     batches: list[RepoSearchFilters] = []
-    current: list[str] = []
-    for repo in repos:
-        candidate = (*current, repo)
-        candidate_filters = filters.model_copy(update={"repos": candidate})
-        candidate_q = candidate_filters.to_query_string()
-        if len(candidate_q) <= MAX_SEARCH_QUERY_Q_LENGTH:
-            current.append(repo)
-            continue
-        if not current:
-            _raise_oversized_search_query(candidate_q)
-        batches.append(filters.model_copy(update={"repos": tuple(current)}))
-        current = [repo]
-        first_query = filters.model_copy(update={"repos": tuple(current)}).to_query_string()
-        _ensure_search_query_fits(first_query)
-    if current:
-        batches.append(filters.model_copy(update={"repos": tuple(current)}))
+    for start in range(0, len(repos), max_repos_per_batch):
+        chunk = repos[start : start + max_repos_per_batch]
+        batches.append(filters.model_copy(update={"repos": chunk}))
     return tuple(batches)
 
 
-def _ensure_search_query_fits(q: str) -> None:
-    if len(q) > MAX_SEARCH_QUERY_Q_LENGTH:
-        _raise_oversized_search_query(q)
+def _ensure_search_boolean_operators_fit(filters: RepoSearchFilters) -> int:
+    user_operators = _search_boolean_operator_count(filters)
+    if user_operators > MAX_SEARCH_BOOLEAN_OPERATORS:
+        raise UntapedError(
+            "GitHub repository search has "
+            f"{user_operators} boolean operators; GitHub allows at most "
+            f"{MAX_SEARCH_BOOLEAN_OPERATORS}. Narrow the query or remove "
+            "AND/OR/NOT operators before adding repository scopes."
+        )
+    return user_operators
 
 
-def _raise_oversized_search_query(q: str) -> None:
-    raise UntapedError(
-        "GitHub repository search query length "
-        f"{len(q)} exceeds {MAX_SEARCH_QUERY_Q_LENGTH}; narrow the free-text query, "
-        "use shorter explicit repo scopes, or search a narrower repository set."
-    )
+def _search_boolean_operator_count(filters: RepoSearchFilters) -> int:
+    raw_query = filters.raw_query or ""
+    return len(_BOOLEAN_OPERATOR_RE.findall(raw_query))
 
 
-def _github_search_validation_error(exc: HttpStatusError, q: str) -> UntapedError:
-    detail = _github_error_detail(exc.body)
-    suffix = f": {detail}" if detail else ""
-    return UntapedError(
+def _search_query_text_length(filters: RepoSearchFilters) -> int:
+    parts: list[str] = []
+    if filters.raw_query:
+        text = _BOOLEAN_OPERATOR_RE.sub("", filters.raw_query).strip()
+        if text:
+            parts.append(text)
+    if filters.name:
+        name = filters.name.strip()
+        if name:
+            parts.append(name)
+    return len(" ".join(parts))
+
+
+def _ensure_search_query_fits(filters: RepoSearchFilters) -> None:
+    length = _search_query_text_length(filters)
+    if length > MAX_SEARCH_QUERY_TEXT_LENGTH:
+        raise UntapedError(
+            "GitHub repository search query text length "
+            f"{length} exceeds {MAX_SEARCH_QUERY_TEXT_LENGTH}; narrow the free-text query "
+            "or search with fewer literal terms."
+        )
+
+
+def _github_search_validation_error(
+    exc: HttpStatusError, filters: RepoSearchFilters
+) -> HttpStatusError:
+    return HttpStatusError(
         "GitHub repository search validation failed for "
-        f"{_REPOSITORY_SEARCH_ENDPOINT} (query length {len(q)}): {exc}{suffix}"
+        f"{_REPOSITORY_SEARCH_ENDPOINT} "
+        f"(query text length {_search_query_text_length(filters)}, "
+        f"boolean operators {_search_boolean_operator_count(filters)}): {exc}",
+        status_code=exc.status_code,
+        url=exc.url,
+        body=exc.body,
     )
 
 
-def _github_error_detail(body: str | None) -> str | None:
-    if not body:
-        return None
-    try:
-        data = json.loads(body)
-    except ValueError:
-        return body.strip() or None
-    if not isinstance(data, dict):
-        return body.strip() or None
-    details: list[str] = []
-    for key in ("message", "error", "detail"):
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            details.append(value.strip())
-    errors = data.get("errors")
-    if isinstance(errors, list):
-        for item in errors:
-            if isinstance(item, dict):
-                value = item.get("message")
-                if isinstance(value, str) and value.strip():
-                    details.append(value.strip())
-    deduped: list[str] = []
-    for detail in details:
-        if detail not in deduped:
-            deduped.append(detail)
-    return "; ".join(deduped) if deduped else body.strip() or None
+def _repo_search_should_globally_sort(filters: RepoSearchFilters) -> bool:
+    return filters.sort in _GLOBAL_REPO_SORTS
+
+
+def _sort_repo_results(rows: list[RepoResult], sort: str | None) -> list[RepoResult]:
+    if sort == "stars":
+        return sorted(rows, key=lambda row: (-row.stargazers_count, row.full_name))
+    if sort == "forks":
+        return sorted(rows, key=lambda row: (-row.forks_count, row.full_name))
+    if sort == "updated":
+        by_name = sorted(rows, key=lambda row: row.full_name)
+        return sorted(by_name, key=lambda row: row.updated_at or "", reverse=True)
+    return rows
 
 
 _SearchMethod = Callable[..., Iterator[dict[str, Any]]]
@@ -216,6 +228,7 @@ class SearchRepos:
         effective = _apply_scope_defaults(filters, team_repos)
         rows: list[RepoResult] = []
         seen: set[str] = set()
+        globally_sort = _repo_search_should_globally_sort(effective)
         for batch in _repo_search_batches(effective):
             q = batch.to_query_string()
             try:
@@ -230,10 +243,20 @@ class SearchRepos:
                         continue
                     seen.add(result.full_name)
                     rows.append(result)
+                    if (
+                        not globally_sort
+                        and effective.limit is not None
+                        and len(rows) >= effective.limit
+                    ):
+                        break
             except HttpStatusError as exc:
                 if exc.status_code == 422:
-                    raise _github_search_validation_error(exc, q) from exc
+                    raise _github_search_validation_error(exc, batch) from exc
                 raise
+            if not globally_sort and effective.limit is not None and len(rows) >= effective.limit:
+                break
+        if globally_sort:
+            rows = _sort_repo_results(rows, effective.sort)
         if effective.limit is not None:
             rows = rows[: effective.limit]
         return iter(rows)

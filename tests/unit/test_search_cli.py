@@ -214,7 +214,7 @@ def test_search_repos_team_resolution(tmp_path: Path, monkeypatch: pytest.Monkey
     assert sent_q == "(repo:acme/api OR repo:acme/web)"
 
 
-def test_search_repos_batches_team_scopes_by_query_length(
+def test_search_repos_batches_team_scopes_by_search_constraints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
@@ -250,11 +250,46 @@ def test_search_repos_batches_team_scopes_by_query_length(
     queries = [call.request.url.params["q"] for call in search_route.calls]
     assert len(queries) > 1
     assert sum(q.count("repo:") for q in queries) == len(team_repos)
-    assert all(len(q) <= 256 for q in queries)
+    assert all(q.count("repo:") <= 6 for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
     assert all("archived:true" in q for q in queries)
 
 
-def test_search_repos_oversized_single_repo_query_fails_before_http(
+def test_search_repos_batches_short_team_scopes_by_operator_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    team_repos = [{"full_name": f"acme/r{i}"} for i in range(13)]
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/teams/backend/repos").mock(
+            return_value=httpx.Response(200, json=team_repos)
+        )
+        search_route = mock.get("/search/repositories").mock(
+            return_value=httpx.Response(200, json={"items": []})
+        )
+        result = CliInvoker().invoke(
+            app,
+            [
+                "search",
+                "repos",
+                "uses: acme/action",
+                "--team",
+                "acme/backend",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    queries = [call.request.url.params["q"] for call in search_route.calls]
+    assert len(queries) == 3
+    assert sum(q.count("repo:") for q in queries) == len(team_repos)
+    assert all(q.count("repo:") <= 6 for q in queries)
+    assert all(q.count(" OR ") <= 5 for q in queries)
+
+
+def test_search_repos_oversized_raw_query_fails_before_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
@@ -268,9 +303,7 @@ def test_search_repos_oversized_single_repo_query_fails_before_http(
             [
                 "search",
                 "repos",
-                "x" * 245,
-                "--repo",
-                "Desjardins/infrasinteroutils-gha-actions-commun-intergiciel",
+                "x" * 257,
                 "--format",
                 "json",
             ],
@@ -278,7 +311,7 @@ def test_search_repos_oversized_single_repo_query_fails_before_http(
 
     assert result.exit_code == 1
     assert search_route.call_count == 0
-    assert "query length" in result.stderr
+    assert "query text length" in result.stderr
     assert "256" in result.stderr
     assert "narrow" in result.stderr
 
@@ -313,9 +346,8 @@ def test_search_repos_422_reports_query_diagnostics(
 
     assert result.exit_code == 1
     assert "/search/repositories" in result.stderr
-    assert "query length" in result.stderr
+    assert "query text length" in result.stderr
     assert "Validation Failed" in result.stderr
-    assert "The search query is invalid" in result.stderr
 
 
 def test_search_code_accepts_org_qualified_team_scope(

@@ -338,12 +338,20 @@ team slug normalizes to that org. CLI parsing turns team values into
 parenthesized OR repo group used by explicit repeated `--repo` flags. The
 repository-search use case resolves team repositories to completion and
 dedupes them with explicit `--repo` scopes, preserving first-seen order. It
-then splits the repo scopes into multiple `/search/repositories` calls so each
-decoded `q` value stays under `MAX_SEARCH_QUERY_Q_LENGTH` (256 characters).
-Every batch is queried, results are deduped by `full_name`, and the user
-`--limit` is applied after all batches have returned. This avoids GitHub's
-422 validation failure for oversized generated OR groups, but it cannot
-guarantee a single global best-match ordering across batches.
+then splits the repo scopes into multiple `/search/repositories` calls using
+GitHub's search validation constraints: at most five boolean operators per
+query and at most 256 user query-text characters, excluding generated
+qualifiers and operators. With no user-supplied boolean operators this means
+up to six generated repo qualifiers per batch; user-supplied `AND`/`OR`/`NOT`
+tokens reduce that budget, and more than five user boolean operators fail
+before any HTTP request.
+
+Repository-search rows are deduped by `full_name`. For the default best-match
+order and `--sort help-wanted-issues`, the use case stops querying batches as
+soon as it has enough unique rows for `--limit`, so selection is still
+batch-order dependent. For `--sort stars`, `--sort forks`, and
+`--sort updated`, every batch is queried and results are locally merge-sorted
+before the final `--limit` slice; ties sort by `full_name`.
 
 `search code` and `search issues` still use the conservative
 `MAX_TEAM_REPO_QUALIFIERS` per-team cap and warning behavior. Do not reuse the
