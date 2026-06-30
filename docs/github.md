@@ -160,6 +160,14 @@ present, in which case a bare team slug is normalized to that org. `--org`
 also remains a search qualifier, so `--org acme --team backend` searches
 within the repos resolved from `acme/backend` under the `org:acme` qualifier.
 
+For `search repos`, team-resolved and explicit repo scopes are deduped and
+automatically split across multiple `/search/repositories` requests when one
+generated OR query would exceed GitHub's query-length validation. The final
+rows are deduped by `full_name` and `--limit` is applied after all batches.
+Batching prevents oversized team searches from failing with 422, but sorted
+or best-match results are ordered per batch rather than as one global GitHub
+ranking.
+
 Repository-specific: `--name`, `--language`, `--archived/--no-archived`,
 `--fork/--no-fork`, `--visibility public|private`, `--sort stars|forks|updated`.
 

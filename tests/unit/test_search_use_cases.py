@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
+from untaped.api import HttpStatusError, UntapedError
 
 from untaped_github.application import (
     GithubSearchService,
@@ -78,6 +79,16 @@ def _stub(search: _StubSearch) -> GithubSearchService:
 
 def _teams(stub: _StubTeams) -> GithubTeamService:
     return cast(GithubTeamService, stub)
+
+
+def _repo_row(full_name: str, *, id_: int) -> dict[str, Any]:
+    owner, _, name = full_name.partition("/")
+    return {
+        "id": id_,
+        "name": name or owner,
+        "full_name": full_name,
+        "html_url": f"https://github.com/{full_name}",
+    }
 
 
 # --- SearchRepos --------------------------------------------------------
@@ -165,20 +176,159 @@ def test_search_issues_resolves_multiple_team_scopes() -> None:
     assert "is:open" in q
 
 
-def test_search_repos_truncates_oversized_team_with_warning() -> None:
-    big = [{"full_name": f"acme/repo{i}"} for i in range(MAX_TEAM_REPO_QUALIFIERS + 5)]
+def test_search_repos_batches_oversized_team_without_truncating() -> None:
+    big = [
+        {"full_name": f"Desjardins/infrasinteroutils-gha-actions-commun-intergiciel-repo{i}"}
+        for i in range(MAX_TEAM_REPO_QUALIFIERS + 5)
+    ]
     teams = _StubTeams(big)
     search = _StubSearch([])
     warnings: list[str] = []
     use_case = SearchRepos(_stub(search), _teams(teams), warn=warnings.append)
 
-    list(use_case(RepoSearchFilters(), team_scopes=(TeamScope("acme", "huge"),)))
+    list(
+        use_case(
+            RepoSearchFilters(
+                raw_query=(
+                    "uses: "
+                    "Desjardins/infrasinteroutils-gha-actions-commun-intergiciel"
+                    "/.github/actions/set-constants-url"
+                ),
+                archived=True,
+            ),
+            team_scopes=(TeamScope("Desjardins", "huge"),),
+        )
+    )
 
-    assert any("truncating" in w for w in warnings)
-    q = search.calls[0][1]
-    assert q.count("repo:") == MAX_TEAM_REPO_QUALIFIERS
-    assert q.count(" OR ") == MAX_TEAM_REPO_QUALIFIERS - 1
-    assert len(q) < 256
+    assert warnings == []
+    queries = [call[1] for call in search.calls]
+    assert len(queries) > 1
+    assert sum(q.count("repo:") for q in queries) == len(big)
+    assert all(len(q) <= 256 for q in queries)
+
+
+def test_search_repos_batches_multiple_teams_by_total_query_budget() -> None:
+    teams = _StubTeams(
+        repos_by_team={
+            ("Desjardins", f"team{i}"): [
+                {
+                    "full_name": (
+                        f"Desjardins/infrasinteroutils-gha-actions-commun-intergiciel-{i}-{j}"
+                    )
+                }
+                for j in range(7)
+            ]
+            for i in range(3)
+        }
+    )
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(teams))
+
+    list(
+        use_case(
+            RepoSearchFilters(
+                raw_query=(
+                    "uses: "
+                    "Desjardins/infrasinteroutils-gha-actions-commun-intergiciel"
+                    "/.github/actions/set-constants-url"
+                ),
+                archived=True,
+                limit=30,
+            ),
+            team_scopes=tuple(TeamScope("Desjardins", f"team{i}") for i in range(3)),
+        )
+    )
+
+    queries = [call[1] for call in search.calls]
+    assert len(queries) > 1
+    assert sum(q.count("repo:") for q in queries) == 21
+    assert all(len(q) <= 256 for q in queries)
+    assert all("archived:true" in q for q in queries)
+
+
+def test_search_repos_dedupes_across_batches_then_applies_limit() -> None:
+    class BatchSearch(_StubSearch):
+        def __init__(self) -> None:
+            super().__init__([])
+            self._rows_by_call = [
+                [_repo_row("acme/api", id_=1), _repo_row("acme/web", id_=2)],
+                [_repo_row("acme/api", id_=1), _repo_row("acme/worker", id_=3)],
+            ]
+
+        def _record(
+            self, endpoint: str, q: str, *, sort: str | None, limit: int | None
+        ) -> Iterator[dict[str, Any]]:
+            self.calls.append((endpoint, q, sort, limit))
+            return iter(self._rows_by_call[len(self.calls) - 1])
+
+    repos = [
+        {"full_name": (f"Desjardins/infrasinteroutils-gha-actions-commun-intergiciel-{i}")}
+        for i in range(2)
+    ]
+    search = BatchSearch()
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams(repos)))
+
+    rows = list(
+        use_case(
+            RepoSearchFilters(
+                raw_query="x" * 150,
+                limit=2,
+            ),
+            team_scopes=(TeamScope("Desjardins", "huge"),),
+        )
+    )
+
+    assert [row.full_name for row in rows] == ["acme/api", "acme/web"]
+    assert len(search.calls) == 2
+
+
+def test_search_repos_fails_before_search_when_single_repo_query_exceeds_budget() -> None:
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
+
+    with pytest.raises(UntapedError) as exc_info:
+        list(
+            use_case(
+                RepoSearchFilters(
+                    raw_query="x" * 245,
+                    repos=("Desjardins/infrasinteroutils-gha-actions-commun-intergiciel",),
+                )
+            )
+        )
+
+    assert "query length" in str(exc_info.value)
+    assert "256" in str(exc_info.value)
+    assert "narrow" in str(exc_info.value)
+    assert search.calls == []
+
+
+def test_search_repos_422_error_reports_endpoint_and_query_length() -> None:
+    class FailingSearch(_StubSearch):
+        def search_repositories(
+            self, q: str, *, sort: str | None = None, limit: int | None = None
+        ) -> Iterator[dict[str, Any]]:
+            self.calls.append(("repos", q, sort, limit))
+            raise HttpStatusError(
+                "HTTP 422 for https://api.github.com/search/repositories?q=x",
+                status_code=422,
+                url="https://api.github.com/search/repositories?q=x",
+                body=(
+                    '{"message":"Validation Failed","errors":'
+                    '[{"message":"The search query is invalid"}]}'
+                ),
+            )
+
+    search = FailingSearch([])
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
+
+    with pytest.raises(UntapedError) as exc_info:
+        list(use_case(RepoSearchFilters(raw_query="x", repos=("acme/api",))))
+
+    message = str(exc_info.value)
+    assert "/search/repositories" in message
+    assert "query length" in message
+    assert "Validation Failed" in message
+    assert "The search query is invalid" in message
 
 
 def test_search_repos_validates_results_into_domain_model() -> None:

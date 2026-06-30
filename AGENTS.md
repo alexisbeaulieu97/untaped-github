@@ -336,12 +336,19 @@ team slug normalizes to that org. CLI parsing turns team values into
 `TeamScope(org, slug)` objects, then the use case calls
 `GET /orgs/{org}/teams/{slug}/repos` and expands the result into the same
 parenthesized OR repo group used by explicit repeated `--repo` flags. The
-use case bounds each team at `MAX_TEAM_REPO_QUALIFIERS + 1` with
-`itertools.islice`; if the cap is exceeded, keep the first N and emit a
-stderr warning through the injected `warn` callback. Keep the cap
-conservative: the generated OR group expands quickly under GitHub's search
-query length budget, and users can pass explicit `--repo` scopes when they
-intentionally want a wider query.
+repository-search use case resolves team repositories to completion and
+dedupes them with explicit `--repo` scopes, preserving first-seen order. It
+then splits the repo scopes into multiple `/search/repositories` calls so each
+decoded `q` value stays under `MAX_SEARCH_QUERY_Q_LENGTH` (256 characters).
+Every batch is queried, results are deduped by `full_name`, and the user
+`--limit` is applied after all batches have returned. This avoids GitHub's
+422 validation failure for oversized generated OR groups, but it cannot
+guarantee a single global best-match ordering across batches.
+
+`search code` and `search issues` still use the conservative
+`MAX_TEAM_REPO_QUALIFIERS` per-team cap and warning behavior. Do not reuse the
+repository-search batching behavior for those endpoints without endpoint-
+specific tests for ordering, limits, and GitHub validation behavior.
 
 `--repo-stdin` reads repo scopes with the SDK's
 `read_identifiers([], stdin=True, id_field="full_name")` and appends them to

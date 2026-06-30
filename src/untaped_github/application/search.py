@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from itertools import islice
 from typing import Any
 
 from pydantic import BaseModel
+from untaped.api import HttpStatusError, UntapedError
 
 from untaped_github.application.ports import GithubSearchService, GithubTeamService
 from untaped_github.application.scopes import TeamScope
@@ -24,11 +26,11 @@ from untaped_github.domain.queries import ScopedQueryBase
 
 WarnFn = Callable[[str], None]
 
-# Team expansion is generated, not user-authored, so keep the automatic
-# OR group small. Six short repo qualifiers render below GitHub's 256-char
-# query budget while still covering the common "backend owns a few repos"
-# case; users can pass explicit --repo values when they need a wider query.
+# Code and issue search still keep generated team OR groups small. Repository
+# search resolves full teams and splits requests by the decoded q-length budget.
 MAX_TEAM_REPO_QUALIFIERS = 6
+MAX_SEARCH_QUERY_Q_LENGTH = 256
+_REPOSITORY_SEARCH_ENDPOINT = "/search/repositories"
 
 
 def _noop(_: str) -> None:
@@ -40,38 +42,130 @@ def _resolve_team_repos(
     *,
     team_scopes: tuple[TeamScope, ...],
     warn: WarnFn,
+    max_repos_per_team: int | None = MAX_TEAM_REPO_QUALIFIERS,
 ) -> tuple[str, ...]:
     """Pre-resolve team scopes into ``owner/name`` repo strings.
 
-    Bounded at ``MAX_TEAM_REPO_QUALIFIERS + 1`` so a 5k-repo team doesn't
-    drag every page over the wire just to be truncated.
+    When ``max_repos_per_team`` is set, bound expansion at ``N + 1`` so a
+    5k-repo team doesn't drag every page over the wire just to be truncated.
     """
-    cap = MAX_TEAM_REPO_QUALIFIERS + 1
     all_repos: list[str] = []
     for scope in team_scopes:
         repos: list[str] = []
-        for entry in islice(teams.list_team_repos(scope.org, scope.slug), cap):
+        entries = teams.list_team_repos(scope.org, scope.slug)
+        if max_repos_per_team is not None:
+            entries = islice(entries, max_repos_per_team + 1)
+        for entry in entries:
             full_name = entry.get("full_name")
             if isinstance(full_name, str) and full_name:
                 repos.append(full_name)
-        if len(repos) > MAX_TEAM_REPO_QUALIFIERS:
+        if max_repos_per_team is not None and len(repos) > max_repos_per_team:
             warn(
-                f"team {scope.org}/{scope.slug} has more than {MAX_TEAM_REPO_QUALIFIERS} repos; "
+                f"team {scope.org}/{scope.slug} has more than {max_repos_per_team} repos; "
                 "truncating to stay under GitHub's query length limit"
             )
-            repos = repos[:MAX_TEAM_REPO_QUALIFIERS]
+            repos = repos[:max_repos_per_team]
         all_repos.extend(repos)
     return tuple(all_repos)
 
 
 def _apply_scope_defaults[F: ScopedQueryBase](filters: F, team_repos: tuple[str, ...]) -> F:
     """Merge team-resolved repos and inject ``user:@me`` when no scope set."""
-    repos = (*filters.repos, *team_repos)
+    repos = _dedupe_repos((*filters.repos, *team_repos))
     has_scope = bool(filters.user or filters.orgs or repos)
     overrides: dict[str, object] = {"repos": repos}
     if not has_scope:
         overrides["user"] = "@me"
     return filters.model_copy(update=overrides)
+
+
+def _dedupe_repos(repos: tuple[str, ...]) -> tuple[str, ...]:
+    """Deduplicate repository scopes while preserving first-seen order."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for repo in repos:
+        if repo in seen:
+            continue
+        seen.add(repo)
+        deduped.append(repo)
+    return tuple(deduped)
+
+
+def _repo_search_batches(filters: RepoSearchFilters) -> tuple[RepoSearchFilters, ...]:
+    """Split repository search filters into decoded-q-length-safe batches."""
+    repos = _dedupe_repos(filters.repos)
+    if not repos:
+        _ensure_search_query_fits(filters.to_query_string())
+        return (filters,)
+
+    batches: list[RepoSearchFilters] = []
+    current: list[str] = []
+    for repo in repos:
+        candidate = (*current, repo)
+        candidate_filters = filters.model_copy(update={"repos": candidate})
+        candidate_q = candidate_filters.to_query_string()
+        if len(candidate_q) <= MAX_SEARCH_QUERY_Q_LENGTH:
+            current.append(repo)
+            continue
+        if not current:
+            _raise_oversized_search_query(candidate_q)
+        batches.append(filters.model_copy(update={"repos": tuple(current)}))
+        current = [repo]
+        first_query = filters.model_copy(update={"repos": tuple(current)}).to_query_string()
+        _ensure_search_query_fits(first_query)
+    if current:
+        batches.append(filters.model_copy(update={"repos": tuple(current)}))
+    return tuple(batches)
+
+
+def _ensure_search_query_fits(q: str) -> None:
+    if len(q) > MAX_SEARCH_QUERY_Q_LENGTH:
+        _raise_oversized_search_query(q)
+
+
+def _raise_oversized_search_query(q: str) -> None:
+    raise UntapedError(
+        "GitHub repository search query length "
+        f"{len(q)} exceeds {MAX_SEARCH_QUERY_Q_LENGTH}; narrow the free-text query, "
+        "use shorter explicit repo scopes, or search a narrower repository set."
+    )
+
+
+def _github_search_validation_error(exc: HttpStatusError, q: str) -> UntapedError:
+    detail = _github_error_detail(exc.body)
+    suffix = f": {detail}" if detail else ""
+    return UntapedError(
+        "GitHub repository search validation failed for "
+        f"{_REPOSITORY_SEARCH_ENDPOINT} (query length {len(q)}): {exc}{suffix}"
+    )
+
+
+def _github_error_detail(body: str | None) -> str | None:
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body.strip() or None
+    if not isinstance(data, dict):
+        return body.strip() or None
+    details: list[str] = []
+    for key in ("message", "error", "detail"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            details.append(value.strip())
+    errors = data.get("errors")
+    if isinstance(errors, list):
+        for item in errors:
+            if isinstance(item, dict):
+                value = item.get("message")
+                if isinstance(value, str) and value.strip():
+                    details.append(value.strip())
+    deduped: list[str] = []
+    for detail in details:
+        if detail not in deduped:
+            deduped.append(detail)
+    return "; ".join(deduped) if deduped else body.strip() or None
 
 
 _SearchMethod = Callable[..., Iterator[dict[str, Any]]]
@@ -113,14 +207,36 @@ class SearchRepos:
         *,
         team_scopes: tuple[TeamScope, ...] = (),
     ) -> Iterator[RepoResult]:
-        return _run_scoped_search(
-            self._search.search_repositories,
-            RepoResult,
+        team_repos = _resolve_team_repos(
             self._teams,
-            filters,
             team_scopes=team_scopes,
             warn=self._warn,
+            max_repos_per_team=None,
         )
+        effective = _apply_scope_defaults(filters, team_repos)
+        rows: list[RepoResult] = []
+        seen: set[str] = set()
+        for batch in _repo_search_batches(effective):
+            q = batch.to_query_string()
+            try:
+                search_rows = self._search.search_repositories(
+                    q,
+                    sort=batch.sort,
+                    limit=batch.limit,
+                )
+                for row in search_rows:
+                    result = RepoResult.model_validate(row)
+                    if result.full_name in seen:
+                        continue
+                    seen.add(result.full_name)
+                    rows.append(result)
+            except HttpStatusError as exc:
+                if exc.status_code == 422:
+                    raise _github_search_validation_error(exc, q) from exc
+                raise
+        if effective.limit is not None:
+            rows = rows[: effective.limit]
+        return iter(rows)
 
 
 class SearchCode:
