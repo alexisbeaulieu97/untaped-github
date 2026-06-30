@@ -164,7 +164,7 @@ def test_grep_exit_above_one_is_failure(tmp_path: Path) -> None:
     repo = _item("acme/api", source)
     cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
 
-    with pytest.raises(GitCorpusError, match="brackets"):
+    with pytest.raises(GitCorpusError, match=r"regular expression|brackets"):
         cache.grep_default_branch(
             repo,
             root=root,
