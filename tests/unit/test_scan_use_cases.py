@@ -118,6 +118,20 @@ class _Corpus:
             for name in sorted(self.cached)
         )
 
+    def get_repo(self, *, root: Path, repo: str) -> object | None:
+        if repo not in self.cached:
+            return None
+        return type(
+            "Repo",
+            (),
+            {
+                "full_name": repo,
+                "default_branch": "main",
+                "clone_url": f"https://github.com/{repo}.git",
+                "html_url": f"https://github.com/{repo}",
+            },
+        )()
+
     def clean_repos(self, *, root: Path, repos: tuple[str, ...]) -> tuple[CorpusRepoResult, ...]:
         selected = repos or tuple(sorted(self.cached))
         for repo in selected:
@@ -195,7 +209,7 @@ def test_list_clean_and_worktree_delegate_to_corpus(tmp_path: Path) -> None:
 
     listed = ListCorpus(corpus)(root=tmp_path / "corpus")
     cleaned = CleanCorpus(corpus)(root=tmp_path / "corpus", repos=("acme/api",))
-    worktree = WorktreeCorpus(_Inventory(), corpus)(
+    worktree = WorktreeCorpus(corpus)(
         "acme/worker",
         root=tmp_path / "corpus",
         ref="main",
@@ -208,6 +222,24 @@ def test_list_clean_and_worktree_delegate_to_corpus(tmp_path: Path) -> None:
         ref="main",
         path=str(tmp_path / "corpus" / "worktrees" / "acme__worker"),
     )
+
+
+def test_worktree_uses_cached_metadata_without_inventory(tmp_path: Path) -> None:
+    corpus = _Corpus(cached={"acme/worker"})
+
+    worktree = WorktreeCorpus(corpus)(
+        "acme/worker",
+        root=tmp_path / "corpus",
+        ref=None,
+    )
+
+    assert worktree.repo == "acme/worker"
+    assert worktree.ref == "main"
+
+
+def test_worktree_missing_cached_repo_is_actionable(tmp_path: Path) -> None:
+    with pytest.raises(GitCorpusError, match="scan sync"):
+        WorktreeCorpus(_Corpus())("acme/missing", root=tmp_path / "corpus", ref=None)
 
 
 def test_parallel_must_be_positive(tmp_path: Path) -> None:

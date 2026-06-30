@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,16 +49,23 @@ class GitCorpusCache:
         """Fetch a repository's default branch into the managed bare corpus."""
         branch = _default_branch(repo)
         url = _remote_url(repo)
+        scoped_auth_header = _auth_header_for_url(url, auth_header)
         bare = cache_path_for(url, cache_dir=root)
         if not (bare / "HEAD").is_file():
             bare.parent.mkdir(parents=True, exist_ok=True)
             self._run(["init", "--bare", str(bare)], timeout=self._slow_timeout)
-        self._ensure_origin(bare, url, auth_header=auth_header)
+        self._ensure_origin(bare, url, auth_header=scoped_auth_header)
         args = ["fetch", "--prune", "origin"]
         if depth > 0:
             args.append(f"--depth={depth}")
         args.append(f"+refs/heads/{branch}:refs/heads/{branch}")
-        self._run(args, cwd=bare, timeout=self._slow_timeout, auth_header=auth_header)
+        self._run(
+            args,
+            cwd=bare,
+            timeout=self._slow_timeout,
+            auth_header=scoped_auth_header,
+            auth_url=url,
+        )
         fetched_at = datetime.now(UTC).isoformat()
         _write_metadata(
             bare,
@@ -104,7 +112,7 @@ class GitCorpusCache:
         """Run ``git grep`` against one cached default branch."""
         branch = _default_branch(repo)
         bare = cache_path_for(_remote_url(repo), cache_dir=root)
-        args = ["grep", "-n", "--column", "-z"]
+        args = ["grep", "-n", "--column", "-z", "-I"]
         if ignore_case:
             args.append("--ignore-case")
         if fixed_strings:
@@ -137,7 +145,11 @@ class GitCorpusCache:
         rows: list[CorpusRepoResult] = []
         for metadata_path in sorted(managed_root.rglob(METADATA_FILE)):
             bare = metadata_path.parent
-            data = _read_metadata(metadata_path)
+            try:
+                data = _read_metadata(metadata_path)
+            except GitCorpusError as exc:
+                print(f"warning: {exc}", file=sys.stderr)
+                continue
             rows.append(
                 CorpusRepoResult(
                     repo=str(data.get("repo") or ""),
@@ -149,6 +161,22 @@ class GitCorpusCache:
                 )
             )
         return tuple(row for row in rows if row.repo and row.ref)
+
+    def get_repo(self, *, root: Path, repo: str) -> CorpusRepoTarget | None:
+        """Return cached repository metadata for ``repo`` if present."""
+        managed_root = root.expanduser()
+        if not managed_root.exists():
+            return None
+        for metadata_path in sorted(managed_root.rglob(METADATA_FILE)):
+            data = _read_metadata(metadata_path)
+            if data.get("repo") != repo:
+                continue
+            return CorpusRepoTarget(
+                full_name=repo,
+                default_branch=_optional_str(data.get("ref")),
+                clone_url=_optional_str(data.get("clone_url")),
+            )
+        return None
 
     def clean_repos(self, *, root: Path, repos: tuple[str, ...]) -> tuple[CorpusRepoResult, ...]:
         """Remove selected repositories from the managed corpus root."""
@@ -162,6 +190,7 @@ class GitCorpusCache:
             bare = Path(row.path).expanduser().resolve()
             if not bare.is_relative_to(managed_root):
                 raise GitCorpusError(f"refusing to remove path outside managed root: {bare}")
+            self._remove_managed_worktrees(bare, managed_root=managed_root)
             shutil.rmtree(bare)
             removed.append(row.model_copy(update={"status": "removed"}))
         return tuple(removed)
@@ -179,14 +208,16 @@ class GitCorpusCache:
         bare = cache_path_for(_remote_url(repo), cache_dir=root)
         if not (bare / "HEAD").is_file():
             raise GitCorpusError("repository is not in the local corpus")
+        if not self._ref_exists(bare, selected_ref):
+            raise GitCorpusError(
+                f"ref is not cached: {selected_ref}; run `untaped-github scan sync`"
+            )
         worktree = _worktree_path(repo.full_name, selected_ref, root=root)
         if worktree.exists() and not (worktree / ".git").exists():
             raise GitCorpusError(f"worktree path exists and is not a git worktree: {worktree}")
         if worktree.exists():
             self._run(
-                ["checkout", "--detach", selected_ref],
-                cwd=worktree,
-                timeout=self._slow_timeout,
+                ["checkout", "--detach", selected_ref], cwd=worktree, timeout=self._slow_timeout
             )
         else:
             worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -204,12 +235,57 @@ class GitCorpusCache:
             capture_text=True,
             check=False,
             auth_header=auth_header,
+            auth_url=url,
         )
         current_url = (current.stdout or "").strip()
         if not current_url:
-            self._run(["remote", "add", "origin", url], cwd=bare, auth_header=auth_header)
+            self._run(
+                ["remote", "add", "origin", url], cwd=bare, auth_header=auth_header, auth_url=url
+            )
         elif current_url != url:
-            self._run(["remote", "set-url", "origin", url], cwd=bare, auth_header=auth_header)
+            self._run(
+                ["remote", "set-url", "origin", url],
+                cwd=bare,
+                auth_header=auth_header,
+                auth_url=url,
+            )
+
+    def _ref_exists(self, bare: Path, ref: str) -> bool:
+        result = self._run(
+            ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            cwd=bare,
+            capture_text=True,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def _remove_managed_worktrees(self, bare: Path, *, managed_root: Path) -> None:
+        result = cast(
+            subprocess.CompletedProcess[str],
+            self._run(
+                ["worktree", "list", "--porcelain"],
+                cwd=bare,
+                capture_text=True,
+                check=False,
+            ),
+        )
+        if result.returncode != 0:
+            return
+        for line in (result.stdout or "").splitlines():
+            if not line.startswith("worktree "):
+                continue
+            worktree = Path(line.removeprefix("worktree ")).expanduser().resolve()
+            if worktree == bare or not worktree.is_relative_to(managed_root / "worktrees"):
+                continue
+            removed = self._run(
+                ["worktree", "remove", "--force", str(worktree)],
+                cwd=bare,
+                check=False,
+                timeout=self._slow_timeout,
+            )
+            if removed.returncode != 0 and worktree.exists():
+                shutil.rmtree(worktree)
+        self._run(["worktree", "prune"], cwd=bare, check=False)
 
     def _run(
         self,
@@ -221,6 +297,7 @@ class GitCorpusCache:
         check: bool = True,
         timeout: float | None = None,
         auth_header: str | None = None,
+        auth_url: str | None = None,
     ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
         if self._git_path is None:
             raise GitCorpusError(f"`{self._git}` not found on PATH")
@@ -228,7 +305,7 @@ class GitCorpusCache:
         env = None
         auth_config_path: Path | None = None
         if auth_header is not None:
-            env, auth_config_path = _auth_config_env(auth_header)
+            env, auth_config_path = _auth_config_env(auth_header, auth_url=auth_url)
         try:
             result = subprocess.run(
                 [self._git_path, *args],
@@ -296,32 +373,56 @@ def _remote_url(repo: CorpusRepoTarget) -> str:
     return f"https://github.com/{repo.full_name}.git"
 
 
+def _auth_header_for_url(url: str, auth_header: str | None) -> str | None:
+    if auth_header is None:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme == "https" and parsed.netloc:
+        return auth_header
+    if parsed.scheme == "file":
+        return None
+    if parsed.scheme or url.startswith("git@"):
+        raise GitCorpusError("authenticated Git corpus sync requires an HTTPS clone_url")
+    return None
+
+
 def _parse_grep_output(payload: bytes, *, repo: str, ref: str) -> tuple[CodeHitResult, ...]:
     if not payload:
         return ()
-    parts = payload.split(b"\0")
-    if parts and parts[-1] == b"":
-        parts = parts[:-1]
     rows: list[CodeHitResult] = []
     prefix = f"{ref}:"
-    for index in range(0, len(parts), 4):
-        try:
-            raw_ref_path, raw_line, raw_column, raw_text = parts[index : index + 4]
-        except ValueError as exc:
-            raise GitCorpusError("could not parse git grep output") from exc
+    cursor = 0
+    while cursor < len(payload):
+        raw_ref_path, cursor = _read_until(payload, cursor, b"\0")
+        raw_line, cursor = _read_until(payload, cursor, b"\0")
+        raw_column, cursor = _read_until(payload, cursor, b"\0")
+        raw_text, cursor = _read_until(payload, cursor, b"\n")
         ref_path = raw_ref_path.decode(errors="replace")
-        path = ref_path.removeprefix(prefix)
+        if not ref_path.startswith(prefix):
+            raise GitCorpusError("could not parse git grep output: malformed ref/path")
+        try:
+            line = int(raw_line.decode())
+            column = int(raw_column.decode())
+        except ValueError as exc:
+            raise GitCorpusError("could not parse git grep output: invalid line/column") from exc
         rows.append(
             CodeHitResult(
                 repo=repo,
                 ref=ref,
-                path=path,
-                line=int(raw_line.decode()),
-                column=int(raw_column.decode()),
+                path=ref_path.removeprefix(prefix),
+                line=line,
+                column=column,
                 text=raw_text.decode(errors="replace").rstrip("\n"),
             )
         )
     return tuple(rows)
+
+
+def _read_until(payload: bytes, cursor: int, delimiter: bytes) -> tuple[bytes, int]:
+    end = payload.find(delimiter, cursor)
+    if end == -1:
+        raise GitCorpusError("could not parse git grep output")
+    return payload[cursor:end], end + len(delimiter)
 
 
 def _worktree_path(repo: str, ref: str, *, root: Path) -> Path:
@@ -335,22 +436,35 @@ def _safe_path_part(value: str) -> str:
 
 
 def _write_metadata(path: Path, data: dict[str, str]) -> None:
-    (path / METADATA_FILE).write_text(json.dumps(data, sort_keys=True) + "\n")
+    target = path / METADATA_FILE
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True) + "\n")
+    os.replace(tmp, target)
 
 
 def _read_metadata(path: Path) -> dict[str, object]:
     try:
         data = json.loads(path.read_text())
-    except OSError, ValueError:
-        return {}
-    return data if isinstance(data, dict) else {}
+    except OSError as exc:
+        raise GitCorpusError(f"could not read corpus metadata {path}: {exc}") from exc
+    except ValueError as exc:
+        raise GitCorpusError(f"could not read corpus metadata {path}: invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise GitCorpusError(f"could not read corpus metadata {path}: expected object")
+    return data
 
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _auth_config_env(auth_header: str) -> tuple[dict[str, str], Path]:
+def _auth_config_env(auth_header: str, *, auth_url: str | None) -> tuple[dict[str, str], Path]:
+    if auth_url is None:
+        raise GitCorpusError("authenticated Git operation missing HTTPS remote URL")
+    parsed = urlparse(auth_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise GitCorpusError("authenticated Git corpus sync requires an HTTPS clone_url")
+    scope = f"https://{parsed.netloc}/"
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -358,7 +472,7 @@ def _auth_config_env(auth_header: str) -> tuple[dict[str, str], Path]:
         suffix=".config",
         delete=False,
     ) as auth_config:
-        auth_config.write("[http]\n")
+        auth_config.write(f'[http "{scope}"]\n')
         auth_config.write(f"\textraheader = {auth_header}\n")
         path = Path(auth_config.name)
     env = os.environ.copy()

@@ -21,7 +21,7 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 - `untaped-github repos list [PATTERN] [--org ORG]... [--team ORG/SLUG|SLUG]...` lists complete org/team repository inventory from GitHub list APIs with at least one repeatable scope.
 - `untaped-github scan sync --org ORG|--team ORG/SLUG|--repo OWNER/NAME` refreshes the local scan corpus with each repo's current default branch.
 - `untaped-github scan grep PATTERN --org ORG|--team ORG/SLUG|--repo OWNER/NAME [--sync]` runs local `git grep` over cached default branches and emits `github.codehit` rows.
-- `untaped-github scan list`, `scan clean --repo OWNER/NAME`, and `scan worktree OWNER/NAME` inspect/prune/materialize the managed corpus.
+- `untaped-github scan list`, `scan clean --repo OWNER/NAME`, `scan clean --all --yes`, and `scan worktree OWNER/NAME` inspect/prune/materialize the managed corpus.
 - `untaped-github search repos` searches repositories.
 - `untaped-github search code` searches code and does not support sort.
 - `untaped-github search issues` searches issues and pull requests.
@@ -46,9 +46,10 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 - Prefer `--format json` for structured search results.
 - Prefer `repos list` over `search repos` when the user needs complete org/team inventory or local glob/regex matching.
 - Prefer `scan grep PATTERN --team ORG/SLUG --sync` for broad repeated code scans. It expands scopes with REST inventory but does not call GitHub Search APIs.
-- `scan grep` is default-branch-only in v1 and uses local `git grep`, not ripgrep. It emits `repo`, `ref`, `path`, `line`, `column`, and `text`; `column` is the first match on the line.
+- `scan grep` is default-branch-only in v1 and uses local `git grep -I`, not ripgrep, so binary files are skipped. It emits `repo`, `ref`, `path`, `line`, `column`, and `text`; `column` is the first match on the line.
 - `scan grep` treats `git grep` exit `1` as a successful no-match. Exit codes above `1` are per-repo failures; successful repo hits are still emitted and the overall command exits non-zero if any repo failed.
-- The scan corpus lives under `github.corpus_path` (default `~/.untaped/github-corpus`) and is managed by `untaped-github`. Use `scan worktree OWNER/NAME` for a one-off checkout path, and `untaped-workspace` for human development workspaces.
+- The scan corpus lives under `github.corpus_path` (default `~/.untaped/github-corpus`) and is managed by `untaped-github`. Use `scan worktree OWNER/NAME` for a one-off checkout path; it reads cached metadata locally and only materializes refs already present in the corpus. Use `untaped-workspace` for human development workspaces.
+- `scan clean` requires either `--repo OWNER/NAME` or `--all --yes`; it also removes managed worktrees for cleaned repos.
 - Scan commands shell out to `git`; Git must be installed and available on `PATH`.
 - Use `--format pipe` to chain a search into another untaped tool: each
   record is tagged (`github.repo`/`github.code`/...), and `--repo-stdin` reads a

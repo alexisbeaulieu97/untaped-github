@@ -29,6 +29,14 @@ RepoOption = Annotated[
     list[str] | None,
     Parameter(name="--repo", help="Repository owner/name. Repeatable.", consume_multiple=False),
 ]
+AllOption = Annotated[
+    bool,
+    Parameter(name="--all", negative="", help="Clean every cached repository."),
+]
+YesOption = Annotated[
+    bool,
+    Parameter(name="--yes", negative="", help="Confirm destructive clean operations."),
+]
 PathOption = Annotated[
     list[str] | None,
     Parameter(name="--path", help="Git pathspec to scan. Repeatable.", consume_multiple=False),
@@ -164,10 +172,12 @@ def worktree_command(
     from untaped_github.application import WorktreeCorpus  # noqa: PLC0415
     from untaped_github.infrastructure import GitCorpusCache  # noqa: PLC0415
 
-    with report_errors(), open_client() as (client, ui):
-        settings = app_context().section("github", GithubSettings)
+    with report_errors():
+        ctx = app_context()
+        ui = ctx.ui()
+        settings = ctx.section("github", GithubSettings)
         with ui.progress("Materializing worktree…"):
-            result = WorktreeCorpus(client, GitCorpusCache())(
+            result = WorktreeCorpus(GitCorpusCache())(
                 repo,
                 root=settings.corpus_path,
                 ref=ref,
@@ -203,6 +213,8 @@ def list_command(
 def clean_command(
     *,
     repo: RepoOption = None,
+    all_repos: AllOption = False,
+    yes: YesOption = False,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
 ) -> None:
@@ -211,12 +223,19 @@ def clean_command(
     from untaped_github.infrastructure import GitCorpusCache  # noqa: PLC0415
 
     with report_errors():
+        repos = tuple(repo or ())
+        if not repos and not all_repos:
+            raise ConfigError("scan clean requires --repo or --all")
+        if repos and all_repos:
+            raise ConfigError("scan clean cannot combine --repo with --all")
+        if all_repos and not yes:
+            raise ConfigError("scan clean --all requires --yes")
         settings = app_context().section("github", GithubSettings)
         rows = [
             row.model_dump()
             for row in CleanCorpus(GitCorpusCache())(
                 root=settings.corpus_path,
-                repos=tuple(repo or ()),
+                repos=repos,
             )
         ]
         rendered = render_rows(

@@ -162,25 +162,103 @@ def test_scan_list_clean_and_worktree(tmp_path: Path, monkeypatch: pytest.Monkey
     source = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
 
     with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:
-        mock.get("/repos/acme/api").mock(
-            return_value=httpx.Response(200, json=_repo("acme/api", source))
-        )
         mock.get("/orgs/acme/repos").mock(
             return_value=httpx.Response(200, json=[_repo("acme/api", source)])
         )
         sync = CliInvoker().invoke(app, ["scan", "sync", "--org", "acme", "--format", "json"])
         listed = CliInvoker().invoke(app, ["scan", "list", "--format", "json"])
         worktree = CliInvoker().invoke(app, ["scan", "worktree", "acme/api", "--format", "json"])
-        cleaned = CliInvoker().invoke(
-            app,
-            ["scan", "clean", "--repo", "acme/api", "--format", "json"],
-        )
 
     assert sync.exit_code == 0, sync.output
     assert json.loads(listed.stdout)[0]["repo"] == "acme/api"
     worktree_path = Path(json.loads(worktree.stdout)["path"])
     assert (worktree_path / "README.md").is_file()
+
+    cleaned = CliInvoker().invoke(
+        app,
+        ["scan", "clean", "--repo", "acme/api", "--format", "json"],
+    )
+
     assert json.loads(cleaned.stdout)[0]["status"] == "removed"
+    assert not worktree_path.exists()
+    assert all("/repos/acme/api" not in str(call.request.url) for call in mock.calls)
+
+
+def test_scan_clean_requires_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(app, ["scan", "clean", "--format", "json"])
+
+    assert result.exit_code != 0
+    assert "requires --repo or --all" in result.output
+
+
+def test_scan_clean_all_requires_yes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(app, ["scan", "clean", "--all", "--format", "json"])
+
+    assert result.exit_code != 0
+    assert "requires --yes" in result.output
+
+
+def test_scan_clean_rejects_repo_with_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(
+        app,
+        ["scan", "clean", "--repo", "acme/api", "--all", "--yes", "--format", "json"],
+    )
+
+    assert result.exit_code != 0
+    assert "cannot combine --repo with --all" in result.output
+
+
+def test_scan_clean_all_yes_removes_every_cached_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    api = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
+    worker = _source_repo(tmp_path, "worker", {"README.md": "uses: acme/action@v1\n"})
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/repos").mock(
+            return_value=httpx.Response(
+                200, json=[_repo("acme/api", api), _repo("acme/worker", worker)]
+            )
+        )
+        sync = CliInvoker().invoke(app, ["scan", "sync", "--org", "acme", "--format", "json"])
+        cleaned = CliInvoker().invoke(
+            app,
+            ["scan", "clean", "--all", "--yes", "--format", "json"],
+        )
+        listed = CliInvoker().invoke(app, ["scan", "list", "--format", "json"])
+
+    assert sync.exit_code == 0, sync.output
+    assert cleaned.exit_code == 0, cleaned.output
+    assert {row["repo"] for row in json.loads(cleaned.stdout)} == {"acme/api", "acme/worker"}
+    assert listed.stdout == "[]\n"
+
+
+def test_scan_worktree_rejects_uncached_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    source = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/repos").mock(
+            return_value=httpx.Response(200, json=[_repo("acme/api", source)])
+        )
+        sync = CliInvoker().invoke(app, ["scan", "sync", "--org", "acme", "--format", "json"])
+        worktree = CliInvoker().invoke(
+            app,
+            ["scan", "worktree", "acme/api", "--ref", "v1.0", "--format", "json"],
+        )
+
+    assert sync.exit_code == 0, sync.output
+    assert worktree.exit_code != 0
+    assert "ref is not cached" in worktree.output
 
 
 def test_scan_parallel_help_documents_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

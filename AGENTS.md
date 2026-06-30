@@ -255,15 +255,21 @@ GitHub Search wrapper and must not call `/search/*`.
 - `scan grep` expands scopes with REST inventory, then runs local `git grep`
   against cached default branches. It uses cache-as-is unless `--sync` is
   passed. `git grep` exit `1` is a successful no-match, not a failure.
+  Binary files are skipped with `git grep -I`.
 - `scan worktree` materializes one cached repo/ref for editor or manual `rg`
-  workflows. Bulk human workspaces belong to `untaped-workspace`.
+  workflows. It resolves repository metadata from the local corpus instead of
+  live REST inventory; `--ref` only works for refs already cached locally. Bulk
+  human workspaces belong to `untaped-workspace`.
 - `scan list` and `scan clean` inspect/prune the managed corpus. Clean
-  operations must refuse paths outside the managed root.
+  operations require `--repo` or `--all --yes`, remove managed worktrees before
+  deleting a bare repo, and must refuse paths outside the managed root. List
+  skips corrupt metadata entries with a warning instead of hiding healthy rows.
 
 The corpus fetch is shallow and blobful by default. Do not add
 `--filter=blob:none` to scan fetches: `git grep <ref>` needs blobs present
-locally. V1 is default-branch-only and HTTPS-token-backed. SSH, all-ref
-scans, and `untaped-ansible` adoption require separate designs.
+locally. V1 sync is default-branch-only and authenticated Git transport is
+HTTPS-token-backed. SSH, all-ref scans, and `untaped-ansible` adoption require
+separate designs.
 
 ## Repository Inventory
 

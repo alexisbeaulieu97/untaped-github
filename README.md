@@ -39,7 +39,8 @@ untaped-github whoami
 untaped-github repos list [PATTERN] [--org ORG]... [--team ORG/SLUG|SLUG]...
 untaped-github scan sync --org ORG|--team ORG/SLUG|--repo OWNER/NAME
 untaped-github scan grep PATTERN --org ORG|--team ORG/SLUG|--repo OWNER/NAME
-untaped-github scan list|clean|worktree ...
+untaped-github scan list|worktree ...
+untaped-github scan clean --repo OWNER/NAME|--all --yes
 untaped-github search repos [QUERY]
 untaped-github search code [QUERY]
 untaped-github search issues [QUERY]

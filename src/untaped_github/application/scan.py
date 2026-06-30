@@ -179,18 +179,15 @@ class CleanCorpus:
 class WorktreeCorpus:
     """Materialize one cached repository ref as a worktree."""
 
-    def __init__(self, inventory: GithubRepositoryInventoryService, corpus: GitCorpus) -> None:
-        self._inventory = inventory
+    def __init__(self, corpus: GitCorpus) -> None:
         self._corpus = corpus
 
     def __call__(self, repo: str, *, root: Path, ref: str | None) -> WorktreeResult:
         owner, separator, name = repo.partition("/")
         if not owner or not separator or not name or "/" in name:
             raise UntapedError(f"repository must be owner/name: {repo!r}")
-        item = _target(
-            ResolveRepositoryInventory(self._inventory)(RepositoryInventoryScope(repos=(repo,)))[0]
-        )
-        if not self._corpus.has_default_branch(item, root=root):
+        item = self._corpus.get_repo(root=root, repo=repo)
+        if item is None:
             raise GitCorpusError(
                 "repository is not in the local corpus; run `untaped-github scan sync`"
             )

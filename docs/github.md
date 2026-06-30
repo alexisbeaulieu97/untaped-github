@@ -148,6 +148,7 @@ untaped-github scan grep 'BaseModel' --org acme --path pyproject.toml
 untaped-github scan list
 untaped-github scan worktree acme/api --format raw --columns path
 untaped-github scan clean --repo acme/api
+untaped-github scan clean --all --yes
 ```
 
 `scan sync` clones or refreshes each repository's current default branch into
@@ -162,7 +163,8 @@ the corpus as-is by default. Pass `--sync` to refresh matching scopes before
 searching; without `--sync`, missing cached repos fail with an actionable
 message. A no-match repository is not a failure: `git grep` exit code `1`
 means success with zero hits, while exit codes above `1` are reported as
-per-repo failures.
+per-repo failures. Binary files are skipped with `git grep -I`; scan output is
+line-oriented text intended for code review and follow-up shell tools.
 
 Supported grep filters are intentionally small in v1:
 
@@ -183,15 +185,22 @@ and column together in one invocation.
 
 `scan worktree REPO` materializes one cached repo/ref into a managed worktree
 and prints its path, which is the escape hatch for editor workflows or manual
-`rg`. Bulk human development workspaces remain the job of `untaped-workspace`;
-the scan corpus is optimized for local scans, not active development.
+`rg`. Worktree resolution is local-corpus backed and does not need a REST
+inventory lookup after sync. In v1, `scan sync` fetches default branches; a
+custom `--ref` only works when that ref is already present in the local corpus,
+otherwise the command fails with a cached-ref message. Bulk human development
+workspaces remain the job of `untaped-workspace`; the scan corpus is optimized
+for local scans, not active development.
 
 `scan list` and `scan clean` inspect and prune the managed corpus. `scan clean`
-only removes paths under the configured corpus root.
+requires either `--repo OWNER/NAME` or `--all --yes`, removes associated
+managed worktrees before deleting a bare repo, and only removes paths under the
+configured corpus root. `scan list` skips corrupt cache metadata with a warning
+so healthy cache entries remain visible.
 
-V1 is default-branch-only and HTTPS-only for Git transport. All-branch/tag
-scans, SSH transport, ripgrep-native structured scanning, and sharing the
-corpus adapter with `untaped-ansible` are future work.
+V1 sync is default-branch-only and authenticated Git transport is HTTPS-only.
+All-branch/tag scans, SSH transport, ripgrep-native structured scanning, and
+sharing the corpus adapter with `untaped-ansible` are future work.
 
 ### `search`
 
