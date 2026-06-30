@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 from untaped.api import HttpStatusError, UntapedError
 
+import untaped_github.application.search as search_module
 from untaped_github.application import (
     GithubSearchService,
     GithubTeamService,
@@ -119,6 +120,37 @@ class _QueuedSearch(_StubSearch):
 
 
 # --- SearchRepos --------------------------------------------------------
+
+
+def test_repo_search_budget_ignores_quoted_boolean_literals() -> None:
+    budget = search_module._repo_search_query_budget(
+        RepoSearchFilters(raw_query='"OR" "AND" "NOT"')
+    )
+
+    assert budget.boolean_operators == 0
+    assert budget.text_length == len("OR AND NOT")
+
+
+def test_repo_search_budget_excludes_supported_qualifiers_only() -> None:
+    budget = search_module._repo_search_query_budget(
+        RepoSearchFilters(
+            raw_query=(
+                'repo:octo/repo -language:javascript uses:octo/action OR "repo:literal" fix:bug'
+            )
+        )
+    )
+
+    assert budget.boolean_operators == 1
+    assert budget.text_length == len("repo:literal fix:bug")
+
+
+def test_repo_search_budget_treats_unterminated_quote_as_literal() -> None:
+    budget = search_module._repo_search_query_budget(
+        RepoSearchFilters(raw_query='"OR repo:literal')
+    )
+
+    assert budget.boolean_operators == 0
+    assert budget.text_length == len("OR repo:literal")
 
 
 def test_search_repos_injects_at_me_when_no_scope() -> None:
@@ -275,6 +307,24 @@ def test_search_repos_user_boolean_operators_reduce_repo_batch_budget() -> None:
     assert all(q.count(" OR ") <= 5 for q in queries)
 
 
+def test_search_repos_quoted_boolean_terms_do_not_reduce_repo_batch_budget() -> None:
+    repos = [{"full_name": f"acme/r{i}"} for i in range(7)]
+    teams = _StubTeams(repos)
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(teams))
+
+    list(
+        use_case(
+            RepoSearchFilters(raw_query='"OR" "AND" "NOT"'),
+            team_scopes=(TeamScope("acme", "ops"),),
+        )
+    )
+
+    queries = [call[1] for call in search.calls]
+    assert len(queries) == 2
+    assert [q.count("repo:") for q in queries] == [MAX_TEAM_REPO_QUALIFIERS, 1]
+
+
 def test_search_repos_rejects_raw_query_with_too_many_boolean_operators() -> None:
     search = _StubSearch([])
     use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
@@ -295,6 +345,26 @@ def test_search_repos_rejects_raw_query_text_over_256_before_search() -> None:
 
     with pytest.raises(UntapedError) as exc_info:
         list(use_case(RepoSearchFilters(raw_query="x" * 257)))
+
+    assert "query text length" in str(exc_info.value)
+    assert "256" in str(exc_info.value)
+    assert len(search.calls) == 1
+
+
+def test_search_repos_raw_supported_qualifiers_do_not_count_toward_256() -> None:
+    search = _StubSearch([])
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams()))
+    qualifiers = (
+        "repo:octo/super-long-repository-name "
+        "org:octo "
+        "uses:octo/reusable-action/.github/workflows/build.yml "
+        "-language:javascript"
+    )
+
+    list(use_case(RepoSearchFilters(raw_query=f"{qualifiers} {'x' * 256}")))
+
+    with pytest.raises(UntapedError) as exc_info:
+        list(use_case(RepoSearchFilters(raw_query=f"{qualifiers} {'x' * 257}")))
 
     assert "query text length" in str(exc_info.value)
     assert "256" in str(exc_info.value)
@@ -368,6 +438,43 @@ def test_search_repos_dedupes_across_batches_then_applies_limit() -> None:
     assert [row.full_name for row in rows] == ["acme/api", "acme/web", "acme/worker"]
     assert len(search.calls) == 2
     assert [call[3] for call in search.calls] == [3, 3]
+
+
+def test_search_repos_warns_when_help_wanted_sort_spans_batches() -> None:
+    repos = [{"full_name": f"acme/r{i}"} for i in range(7)]
+    search = _StubSearch([])
+    warnings: list[str] = []
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams(repos)), warn=warnings.append)
+
+    list(
+        use_case(
+            RepoSearchFilters(sort="help-wanted-issues"),
+            team_scopes=(TeamScope("acme", "ops"),),
+        )
+    )
+
+    assert warnings == [
+        "search repos --sort help-wanted-issues is applied per GitHub request; "
+        "multi-batch team searches may return batch-order-dependent selections"
+    ]
+    assert len(search.calls) == 2
+
+
+def test_search_repos_does_not_warn_help_wanted_sort_for_single_batch() -> None:
+    repos = [{"full_name": "acme/api"}, {"full_name": "acme/web"}]
+    search = _StubSearch([])
+    warnings: list[str] = []
+    use_case = SearchRepos(_stub(search), _teams(_StubTeams(repos)), warn=warnings.append)
+
+    list(
+        use_case(
+            RepoSearchFilters(sort="help-wanted-issues"),
+            team_scopes=(TeamScope("acme", "ops"),),
+        )
+    )
+
+    assert warnings == []
+    assert len(search.calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -478,6 +585,26 @@ def test_search_code_truncates_oversized_team_with_warning() -> None:
     list(
         use_case(
             CodeSearchFilters(raw_query="TODO"),
+            team_scopes=(TeamScope("acme", "huge"),),
+        )
+    )
+
+    assert any("truncating" in w for w in warnings)
+    q = search.calls[0][1]
+    assert q.count("repo:") == MAX_TEAM_REPO_QUALIFIERS
+    assert q.count(" OR ") == MAX_TEAM_REPO_QUALIFIERS - 1
+
+
+def test_search_issues_truncates_oversized_team_with_warning() -> None:
+    big = [{"full_name": f"acme/repo{i}"} for i in range(MAX_TEAM_REPO_QUALIFIERS + 5)]
+    teams = _StubTeams(big)
+    search = _StubSearch([])
+    warnings: list[str] = []
+    use_case = SearchIssues(_stub(search), _teams(teams), warn=warnings.append)
+
+    list(
+        use_case(
+            IssueSearchFilters(state="open"),
             team_scopes=(TeamScope("acme", "huge"),),
         )
     )

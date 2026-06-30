@@ -164,18 +164,23 @@ For `search repos`, team-resolved and explicit repo scopes are deduped and
 automatically split across multiple `/search/repositories` requests to stay
 within GitHub's search validation limits: at most five `AND`/`OR`/`NOT`
 operators per query and at most 256 user query-text characters, excluding
-generated qualifiers/operators. With no user boolean operators, each generated
-repo batch contains at most six repos; user boolean operators reduce that
-repo budget.
+generated qualifiers/operators and unquoted supported raw qualifiers. Quoted
+terms always count as literal query text, so quoted `AND`/`OR`/`NOT` tokens do
+not reduce the repo batch budget. With no user boolean operators, each
+generated repo batch contains at most six repos; user boolean operators reduce
+that repo budget.
 
 The final rows are deduped by `full_name`. Default best-match searches and
 `--sort help-wanted-issues` stop once enough unique rows are available for
-`--limit`, so selection remains batch-order dependent. `--sort stars`,
-`--sort forks`, and `--sort updated` query every batch and locally merge-sort
-the combined results before applying the final `--limit`.
+`--limit`, so selection remains batch-order dependent. Multi-batch
+`--sort help-wanted-issues` searches emit a warning because GitHub applies
+that sort per request. `--sort stars`, `--sort forks`, and `--sort updated`
+query every batch and locally merge-sort the combined results before applying
+the final `--limit`.
 
 Repository-specific: `--name`, `--language`, `--archived/--no-archived`,
-`--fork/--no-fork`, `--visibility public|private`, `--sort stars|forks|updated`.
+`--fork/--no-fork`, `--visibility public|private`,
+`--sort stars|forks|help-wanted-issues|updated`.
 
 Code-specific: `--language`, `--filename`, `--path`, `--extension`.
 

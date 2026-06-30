@@ -341,17 +341,21 @@ dedupes them with explicit `--repo` scopes, preserving first-seen order. It
 then splits the repo scopes into multiple `/search/repositories` calls using
 GitHub's search validation constraints: at most five boolean operators per
 query and at most 256 user query-text characters, excluding generated
-qualifiers and operators. With no user-supplied boolean operators this means
-up to six generated repo qualifiers per batch; user-supplied `AND`/`OR`/`NOT`
-tokens reduce that budget, and more than five user boolean operators fail
-before any HTTP request.
+qualifiers/operators and unquoted supported raw qualifiers. Quoted terms
+always count as literal query text, so quoted `AND`/`OR`/`NOT` tokens do not
+reduce the generated repo batch budget. With no user-supplied boolean
+operators this means up to six generated repo qualifiers per batch;
+user-supplied unquoted `AND`/`OR`/`NOT` tokens reduce that budget, and more
+than five user boolean operators fail before any HTTP request.
 
 Repository-search rows are deduped by `full_name`. For the default best-match
 order and `--sort help-wanted-issues`, the use case stops querying batches as
 soon as it has enough unique rows for `--limit`, so selection is still
-batch-order dependent. For `--sort stars`, `--sort forks`, and
-`--sort updated`, every batch is queried and results are locally merge-sorted
-before the final `--limit` slice; ties sort by `full_name`.
+batch-order dependent. Multi-batch `--sort help-wanted-issues` searches emit
+a warning because GitHub applies that sort per request. For `--sort stars`,
+`--sort forks`, and `--sort updated`, every batch is queried and results are
+locally merge-sorted before the final `--limit` slice; ties sort by
+`full_name`.
 
 `search code` and `search issues` still use the conservative
 `MAX_TEAM_REPO_QUALIFIERS` per-team cap and warning behavior. Do not reuse the

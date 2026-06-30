@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
@@ -33,8 +33,50 @@ MAX_TEAM_REPO_QUALIFIERS = 6
 MAX_SEARCH_QUERY_TEXT_LENGTH = 256
 MAX_SEARCH_BOOLEAN_OPERATORS = 5
 _REPOSITORY_SEARCH_ENDPOINT = "/search/repositories"
-_BOOLEAN_OPERATOR_RE = re.compile(r"(?<!\S)(?:AND|OR|NOT)(?!\S)")
+_SEARCH_BOOLEAN_OPERATORS = {"AND", "OR", "NOT"}
+_REPO_SEARCH_QUALIFIER_KEYS = frozenset(
+    {
+        "archived",
+        "created",
+        "followers",
+        "fork",
+        "good-first-issues",
+        "help-wanted-issues",
+        "in",
+        "is",
+        "language",
+        "license",
+        "mirror",
+        "org",
+        "pushed",
+        "repo",
+        "size",
+        "stars",
+        "template",
+        "topic",
+        "topics",
+        "user",
+        "uses",
+        "visibility",
+    }
+)
 _GLOBAL_REPO_SORTS = {"stars", "forks", "updated"}
+_HELP_WANTED_BATCH_WARNING = (
+    "search repos --sort help-wanted-issues is applied per GitHub request; "
+    "multi-batch team searches may return batch-order-dependent selections"
+)
+
+
+@dataclass(frozen=True)
+class _SearchQueryToken:
+    value: str
+    quoted: bool
+
+
+@dataclass(frozen=True)
+class _RepoSearchQueryBudget:
+    text_length: int
+    boolean_operators: int
 
 
 def _noop(_: str) -> None:
@@ -124,21 +166,68 @@ def _ensure_search_boolean_operators_fit(filters: RepoSearchFilters) -> int:
 
 
 def _search_boolean_operator_count(filters: RepoSearchFilters) -> int:
-    raw_query = filters.raw_query or ""
-    return len(_BOOLEAN_OPERATOR_RE.findall(raw_query))
+    return _repo_search_query_budget(filters).boolean_operators
 
 
 def _search_query_text_length(filters: RepoSearchFilters) -> int:
+    return _repo_search_query_budget(filters).text_length
+
+
+def _repo_search_query_budget(filters: RepoSearchFilters) -> _RepoSearchQueryBudget:
     parts: list[str] = []
-    if filters.raw_query:
-        text = _BOOLEAN_OPERATOR_RE.sub("", filters.raw_query).strip()
-        if text:
-            parts.append(text)
+    boolean_operators = 0
+    for token in _tokenize_search_query(filters.raw_query or ""):
+        if not token.quoted and token.value in _SEARCH_BOOLEAN_OPERATORS:
+            boolean_operators += 1
+            continue
+        if not token.quoted and _is_repo_search_qualifier(token.value):
+            continue
+        if token.value:
+            parts.append(token.value)
     if filters.name:
         name = filters.name.strip()
         if name:
             parts.append(name)
-    return len(" ".join(parts))
+    return _RepoSearchQueryBudget(
+        text_length=len(" ".join(parts)),
+        boolean_operators=boolean_operators,
+    )
+
+
+def _tokenize_search_query(raw_query: str) -> tuple[_SearchQueryToken, ...]:
+    tokens: list[_SearchQueryToken] = []
+    chars: list[str] = []
+    quoted = False
+    token_quoted = False
+
+    for char in raw_query:
+        if quoted:
+            if char == '"':
+                quoted = False
+            else:
+                chars.append(char)
+            continue
+        if char == '"':
+            quoted = True
+            token_quoted = True
+            continue
+        if char.isspace():
+            if chars or token_quoted:
+                tokens.append(_SearchQueryToken("".join(chars), token_quoted))
+                chars = []
+                token_quoted = False
+            continue
+        chars.append(char)
+
+    if chars or token_quoted:
+        tokens.append(_SearchQueryToken("".join(chars), token_quoted))
+    return tuple(tokens)
+
+
+def _is_repo_search_qualifier(value: str) -> bool:
+    token = value[1:] if value.startswith("-") else value
+    key, sep, _ = token.partition(":")
+    return bool(sep and key and key.lower() in _REPO_SEARCH_QUALIFIER_KEYS)
 
 
 def _ensure_search_query_fits(filters: RepoSearchFilters) -> None:
@@ -229,7 +318,10 @@ class SearchRepos:
         rows: list[RepoResult] = []
         seen: set[str] = set()
         globally_sort = _repo_search_should_globally_sort(effective)
-        for batch in _repo_search_batches(effective):
+        batches = _repo_search_batches(effective)
+        if effective.sort == "help-wanted-issues" and len(batches) > 1:
+            self._warn(_HELP_WANTED_BATCH_WARNING)
+        for batch in batches:
             q = batch.to_query_string()
             try:
                 search_rows = self._search.search_repositories(
