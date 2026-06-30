@@ -1,6 +1,6 @@
 [project]
 name = "untaped-github"
-version = "0.12.3"
+version = "0.12.4"
 description = "GitHub user and search CLI built on the untaped SDK."
 authors = [
     { name = "Alexis Beaulieu", email = "alexisbeaulieu97@gmail.com" }

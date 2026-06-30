@@ -1,7 +1,10 @@
+from untaped_github.domain.corpus import CorpusFailure, CorpusRepoTarget
 from untaped_github.domain.models import (
     BatchRepoRefsFailure,
     BatchRepoRefsResult,
+    CodeHitResult,
     CodeResult,
+    CorpusRepoResult,
     GithubUser,
     IssueResult,
     RepoListResult,
@@ -9,6 +12,7 @@ from untaped_github.domain.models import (
     RepoRefs,
     RepoResult,
     UserResult,
+    WorktreeResult,
 )
 from untaped_github.domain.queries import (
     CodeSearchFilters,
@@ -20,8 +24,12 @@ from untaped_github.domain.queries import (
 __all__ = [
     "BatchRepoRefsFailure",
     "BatchRepoRefsResult",
+    "CodeHitResult",
     "CodeResult",
     "CodeSearchFilters",
+    "CorpusFailure",
+    "CorpusRepoResult",
+    "CorpusRepoTarget",
     "GithubUser",
     "IssueResult",
     "IssueSearchFilters",
@@ -32,4 +40,5 @@ __all__ = [
     "RepoSearchFilters",
     "UserResult",
     "UserSearchFilters",
+    "WorktreeResult",
 ]

@@ -8,8 +8,9 @@ workflow, update this file in the same commit.
 
 `untaped-github` is a standalone CLI built on the `untaped` SDK, invoked as
 `untaped-github`. It provides authenticated user inspection, GitHub REST
-search (`repos`, `code`, `issues`, `users`), and complete org/team repository
-inventory. The `untaped` SDK owns config
+search (`repos`, `code`, `issues`, `users`), complete org/team repository
+inventory, and local Git-corpus scans for repeated team-wide code searches.
+The `untaped` SDK owns config
 loading, output helpers, HTTP/TLS primitives, profile selection, and shared
 errors. Profile selection is built into the SDK and works in any token
 position.
@@ -79,7 +80,7 @@ src/untaped_github/
 ├── cli/                  # Cyclopts commands; composition root
 ├── application/          # use cases and ports
 ├── domain/               # pure models and query value objects
-└── infrastructure/       # GithubClient, REST pagination, GraphQL ref probe
+└── infrastructure/       # GithubClient, REST/GraphQL adapters, Git corpus
 ```
 
 The CLI declares `GithubSettings` as its `github` settings section, mounts
@@ -124,6 +125,10 @@ auto-detection: the user configures it explicitly.
 class unless the adapter needs extra invariants beyond the Pydantic schema.
 Adding a field is a two-place edit: `GithubSettings` plus the constructor
 or call site that consumes it.
+
+`github.corpus_path` defaults to `~/.untaped/github-corpus` and is owned by
+the `scan` command group. It stores managed bare repositories and worktrees
+used for local scans; do not treat it as a human development workspace.
 
 ## HTTP Wiring
 
@@ -238,6 +243,27 @@ Future high-volume features should honor `X-RateLimit-Remaining` and
 
 GraphQL (`batch_repo_refs`) draws on a separate 5000 points/hour budget;
 see "GraphQL Batched Ref Probe" above for cost math.
+
+## Local Scan Corpus
+
+`scan` is a Cyclopts sub-app for local, repeatable code scans. It is not a
+GitHub Search wrapper and must not call `/search/*`.
+
+- `scan sync` expands inventory scopes through `ResolveRepositoryInventory`
+  and fetches each repo's current default branch into a deterministic bare
+  repo under `github.corpus_path`.
+- `scan grep` expands scopes with REST inventory, then runs local `git grep`
+  against cached default branches. It uses cache-as-is unless `--sync` is
+  passed. `git grep` exit `1` is a successful no-match, not a failure.
+- `scan worktree` materializes one cached repo/ref for editor or manual `rg`
+  workflows. Bulk human workspaces belong to `untaped-workspace`.
+- `scan list` and `scan clean` inspect/prune the managed corpus. Clean
+  operations must refuse paths outside the managed root.
+
+The corpus fetch is shallow and blobful by default. Do not add
+`--filter=blob:none` to scan fetches: `git grep <ref>` needs blobs present
+locally. V1 is default-branch-only and HTTPS-token-backed. SSH, all-ref
+scans, and `untaped-ansible` adoption require separate designs.
 
 ## Repository Inventory
 
@@ -396,18 +422,20 @@ Two efficiency/defense rules are load-bearing:
 ## Layering
 
 - `domain/`: `GithubUser`, `RepoResult`, `RepoListResult`, `CodeResult`,
-  `IssueResult`, `UserResult`, frozen search filter value objects in
-  `queries.py`, and pure repo inventory pattern helpers in
-  `repo_filters.py`. Query/filter helpers do no I/O.
+  `CodeHitResult`, `CorpusRepoResult`, `IssueResult`, `UserResult`, frozen
+  search filter value objects in `queries.py`, local corpus value objects in
+  `corpus.py`, and pure repo inventory pattern helpers in `repo_filters.py`.
+  Query/filter helpers do no I/O.
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
-  `SearchUsers`, `ListRepos`, shared scope value objects, and their
+  `SearchUsers`, `ListRepos`, `SyncCorpus`, `GrepCorpus`, `ListCorpus`,
+  `CleanCorpus`, `WorktreeCorpus`, shared scope value objects, and their
   `Protocol` ports. Scope defaulting, team-to-repo resolution, repo-list
-  enumeration, dedupe, and ordering live here.
+  enumeration, dedupe, ordering, and corpus orchestration live here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
   `pagination.py` (REST Link-header mechanics over the SDK's `paginate_pages`),
-  and `graphql.py` (batched ref-probe query building and response
-  parsing). Adapters satisfy application ports structurally and do not
-  import `application`.
+  `graphql.py` (batched ref-probe query building and response parsing), and
+  `git_corpus.py` (local Git subprocess adapter). Adapters satisfy application
+  ports structurally and do not import `application`.
 - `cli/`: composition root. `cli/_client.open_client` reads this tool's config
   and returns a context-managed `GithubClient`; top-level commands use it.
 

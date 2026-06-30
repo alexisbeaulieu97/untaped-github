@@ -87,6 +87,42 @@ class CodeResult(BaseModel):
         return data
 
 
+class CorpusRepoResult(BaseModel):
+    """One repository row in the local scan corpus."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    repo: str
+    ref: str
+    path: str
+    clone_url: str | None = None
+    status: Literal["synced", "cached", "removed"] = "cached"
+    fetched_at: str | None = None
+
+
+class CodeHitResult(BaseModel):
+    """One line matched by the local Git corpus scanner."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    repo: str
+    ref: str
+    path: str
+    line: int
+    column: int
+    text: str
+
+
+class WorktreeResult(BaseModel):
+    """A materialized worktree path for a cached repository ref."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    repo: str
+    ref: str
+    path: str
+
+
 class IssueResult(BaseModel):
     """One row of ``GET /search/issues``.
 

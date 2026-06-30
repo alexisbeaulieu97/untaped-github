@@ -3,7 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from untaped_github.domain import (
+        CodeHitResult,
+        CorpusRepoResult,
+        CorpusRepoTarget,
+        WorktreeResult,
+    )
 
 
 class GithubMeService(Protocol):
@@ -56,3 +66,45 @@ class GithubRepositoryInventoryService(GithubRepoListService, Protocol):
     """Repository metadata endpoints used by reusable inventory expansion."""
 
     def get_repository(self, owner: str, repo: str) -> dict[str, Any]: ...
+
+
+class GitCorpus(Protocol):
+    """Local Git corpus operations used by scan commands."""
+
+    def sync_default_branch(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        depth: int,
+        auth_header: str | None,
+    ) -> CorpusRepoResult: ...
+
+    def has_default_branch(self, repo: CorpusRepoTarget, *, root: Path) -> bool: ...
+
+    def grep_default_branch(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        pattern: str,
+        paths: tuple[str, ...],
+        globs: tuple[str, ...],
+        ignore_case: bool,
+        fixed_strings: bool,
+        word_regexp: bool,
+    ) -> tuple[CodeHitResult, ...]: ...
+
+    def list_repos(self, *, root: Path) -> tuple[CorpusRepoResult, ...]: ...
+
+    def clean_repos(
+        self, *, root: Path, repos: tuple[str, ...]
+    ) -> tuple[CorpusRepoResult, ...]: ...
+
+    def materialize_worktree(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str | None,
+    ) -> WorktreeResult: ...

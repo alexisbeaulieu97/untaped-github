@@ -4,6 +4,7 @@ from untaped_github.application.inventory import (
     ResolveRepositoryInventory,
 )
 from untaped_github.application.ports import (
+    GitCorpus,
     GithubMeService,
     GithubRepoListService,
     GithubRepositoryInventoryService,
@@ -11,6 +12,15 @@ from untaped_github.application.ports import (
     GithubTeamService,
 )
 from untaped_github.application.repos import ListRepos, RepoListFilters
+from untaped_github.application.scan import (
+    CleanCorpus,
+    GrepCorpus,
+    GrepOptions,
+    ListCorpus,
+    SyncCorpus,
+    SyncOptions,
+    WorktreeCorpus,
+)
 from untaped_github.application.scopes import TeamScope, normalize_team_scopes
 from untaped_github.application.search import (
     SearchCode,
@@ -21,11 +31,16 @@ from untaped_github.application.search import (
 from untaped_github.application.whoami import WhoAmI
 
 __all__ = [
+    "CleanCorpus",
+    "GitCorpus",
     "GithubMeService",
     "GithubRepoListService",
     "GithubRepositoryInventoryService",
     "GithubSearchService",
     "GithubTeamService",
+    "GrepCorpus",
+    "GrepOptions",
+    "ListCorpus",
     "ListRepos",
     "RepoListFilters",
     "RepositoryInventoryItem",
@@ -35,7 +50,10 @@ __all__ = [
     "SearchIssues",
     "SearchRepos",
     "SearchUsers",
+    "SyncCorpus",
+    "SyncOptions",
     "TeamScope",
     "WhoAmI",
+    "WorktreeCorpus",
     "normalize_team_scopes",
 ]

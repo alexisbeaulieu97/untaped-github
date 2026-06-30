@@ -12,6 +12,7 @@ from untaped.api import (
 
 from untaped_github.cli._client import open_client
 from untaped_github.cli.repos_commands import app as repos_app
+from untaped_github.cli.scan_commands import app as scan_app
 from untaped_github.cli.search_commands import app as search_app
 
 app = create_app(
@@ -36,4 +37,5 @@ def whoami_command(
 
 
 app.command(repos_app, name="repos")
+app.command(scan_app, name="scan")
 app.command(search_app, name="search")

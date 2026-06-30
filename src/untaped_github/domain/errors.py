@@ -32,3 +32,7 @@ class GithubGraphqlError(UntapedError):
         self.status_code = status_code
         self.url = url
         self.body = body
+
+
+class GitCorpusError(UntapedError):
+    """Local Git corpus operation failure."""
