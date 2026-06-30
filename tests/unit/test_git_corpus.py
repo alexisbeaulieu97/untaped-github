@@ -334,6 +334,89 @@ def test_auth_config_is_scoped_to_https_origin() -> None:
         path.unlink(missing_ok=True)
 
 
+def test_authenticated_run_failure_captures_and_redacts_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured.update(kwargs)
+        assert kwargs["stderr"] is subprocess.PIPE
+        assert "capture_output" not in kwargs
+        return subprocess.CompletedProcess(
+            args,
+            1,
+            stderr=b"fatal: AUTHORIZATION: basic secret rejected\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cache = GitCorpusCache()
+
+    with pytest.raises(GitCorpusError) as excinfo:
+        cache._run(
+            ["fetch", "origin"],
+            auth_header="AUTHORIZATION: basic secret",
+            auth_url="https://github.example.com/acme/api.git",
+        )
+
+    assert "AUTHORIZATION: basic secret" not in str(excinfo.value)
+    assert "fatal: <redacted> rejected" in str(excinfo.value)
+    assert captured["stdout"] is None
+
+
+def test_authenticated_run_scrubs_trace_env_on_success(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    child_env: dict[str, str] = {}
+
+    monkeypatch.setenv("GIT_TRACE", "1")
+    monkeypatch.setenv("GIT_TRACE_CURL", "1")
+    monkeypatch.setenv("GIT_TRACE_CURL_NO_DATA", "1")
+    monkeypatch.setenv("GIT_TRACE_PERFORMANCE", "1")
+    monkeypatch.setenv("GIT_TRACE2_EVENT", "/tmp/git-trace.json")
+    monkeypatch.setenv("GIT_CURL_VERBOSE", "1")
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        assert kwargs["stderr"] is subprocess.PIPE
+        assert kwargs["stdout"] is None
+        child_env.update(kwargs["env"])  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(args, 0, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cache = GitCorpusCache()
+
+    result = cache._run(
+        ["fetch", "origin"],
+        auth_header="AUTHORIZATION: basic secret",
+        auth_url="https://github.example.com/acme/api.git",
+    )
+
+    assert result.returncode == 0
+    assert not any(key.startswith("GIT_TRACE") for key in child_env)
+    assert "GIT_CURL_VERBOSE" not in child_env
+    assert capsys.readouterr().err == ""
+
+
+def test_unauthenticated_run_keeps_existing_output_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cache = GitCorpusCache()
+
+    result = cache._run(["status"])
+
+    assert result.returncode == 0
+    assert captured["env"] is None
+    assert captured["stdout"] is None
+    assert captured["stderr"] is None
+
+
 def test_auth_config_rejects_non_https_remote() -> None:
     with pytest.raises(GitCorpusError, match="HTTPS clone_url"):
         _auth_config_env("AUTHORIZATION: basic secret", auth_url="git@github.com:acme/api.git")

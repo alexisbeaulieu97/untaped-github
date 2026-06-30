@@ -306,13 +306,18 @@ class GitCorpusCache:
         auth_config_path: Path | None = None
         if auth_header is not None:
             env, auth_config_path = _auth_config_env(auth_header, auth_url=auth_url)
+        capture_stdout = subprocess.PIPE if capture_text or capture_bytes else None
+        capture_stderr = (
+            subprocess.PIPE if capture_text or capture_bytes or auth_header is not None else None
+        )
         try:
             result = subprocess.run(
                 [self._git_path, *args],
                 cwd=cwd,
                 env=env,
                 text=capture_text,
-                capture_output=capture_text or capture_bytes,
+                stdout=capture_stdout,
+                stderr=capture_stderr,
                 check=False,
                 timeout=effective_timeout,
             )
@@ -476,6 +481,10 @@ def _auth_config_env(auth_header: str, *, auth_url: str | None) -> tuple[dict[st
         auth_config.write(f"\textraheader = {auth_header}\n")
         path = Path(auth_config.name)
     env = os.environ.copy()
+    # Git/curl trace output can include the injected Authorization header.
+    for key in list(env):
+        if key.startswith("GIT_TRACE") or key == "GIT_CURL_VERBOSE":
+            env.pop(key, None)
     count = _git_config_count(env)
     env[f"GIT_CONFIG_KEY_{count}"] = "include.path"
     env[f"GIT_CONFIG_VALUE_{count}"] = str(path)
