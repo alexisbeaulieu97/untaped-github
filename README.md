@@ -11,6 +11,13 @@ untaped tool ships.
 ## Install
 
 ```bash
+uv tool install untaped-github
+```
+
+<!-- remove source fallback after first PyPI release -->
+Until the first PyPI release is available, install from source:
+
+```bash
 uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git
 ```
 
@@ -73,7 +80,8 @@ uv run untaped-github --help
 ```
 
 See [AGENTS.md](./AGENTS.md) for architecture rules and GitHub-specific
-contracts.
+contracts. See [docs/release.md](./docs/release.md) for the PyPI/TestPyPI
+release workflow.
 
 ## Security
 

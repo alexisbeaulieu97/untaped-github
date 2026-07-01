@@ -12,10 +12,14 @@ searches answer "what's mine?".
 ## Setup
 
 ```bash
-uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git
+uv tool install untaped-github
 untaped-github config set token ghp_xxx         # bare key → this tool's section
 untaped-github whoami                           # confirm it works
 ```
+
+<!-- remove source fallback after first PyPI release -->
+Until the first PyPI release is available, install from source with:
+`uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git`.
 
 Profile selection is built into the SDK: the `--profile <name>` option
 works in any token position, e.g. `untaped-github --profile work whoami`.

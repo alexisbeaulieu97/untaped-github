@@ -1,7 +1,10 @@
 [project]
 name = "untaped-github"
-version = "0.12.4"
+version = "0.12.5"
 description = "GitHub user and search CLI built on the untaped SDK."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Alexis Beaulieu", email = "alexisbeaulieu97@gmail.com" }
 ]
@@ -9,7 +12,7 @@ requires-python = ">=3.14"
 dependencies = [
     "cyclopts>=4.16.0,<5",
     "pydantic>=2.13.3",
-    "untaped>=2.4.0,<3",
+    "untaped>=2.4.4,<3",
 ]
 
 [project.scripts]
@@ -26,6 +29,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
+    "pyyaml>=6.0.3",
     "respx>=0.23.1",
     "ruff>=0.15.12",
 ]
@@ -104,4 +108,4 @@ exclude_also = [
 ]
 
 [tool.uv.sources]
-untaped = { git = "https://github.com/alexisbeaulieu97/untaped.git", rev = "v2.4.0" }
+untaped = { git = "https://github.com/alexisbeaulieu97/untaped.git", rev = "v2.4.4" }

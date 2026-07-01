@@ -667,8 +667,8 @@ wheels = [
 
 [[package]]
 name = "untaped"
-version = "2.4.0"
-source = { git = "https://github.com/alexisbeaulieu97/untaped.git?rev=v2.4.0#6afaef770fd242838d2ba23ccfd465bcb02a6508" }
+version = "2.4.4"
+source = { git = "https://github.com/alexisbeaulieu97/untaped.git?rev=v2.4.4#e9a0560ad39a11d6d145f44e177df5ad650e06bf" }
 dependencies = [
     { name = "cyclopts" },
     { name = "filelock" },
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "untaped-github"
-version = "0.12.4"
+version = "0.12.5"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
@@ -698,6 +698,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pyyaml" },
     { name = "respx" },
     { name = "ruff" },
 ]
@@ -706,7 +707,7 @@ dev = [
 requires-dist = [
     { name = "cyclopts", specifier = ">=4.16.0,<5" },
     { name = "pydantic", specifier = ">=2.13.3" },
-    { name = "untaped", git = "https://github.com/alexisbeaulieu97/untaped.git?rev=v2.4.0" },
+    { name = "untaped", git = "https://github.com/alexisbeaulieu97/untaped.git?rev=v2.4.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -716,6 +717,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "respx", specifier = ">=0.23.1" },
     { name = "ruff", specifier = ">=0.15.12" },
 ]

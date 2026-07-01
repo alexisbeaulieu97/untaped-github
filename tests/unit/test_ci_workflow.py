@@ -9,7 +9,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 USES_RE = re.compile(r"^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?\s*$", re.MULTILINE)
-EXPECTED_UV_VERSION = "0.11.19"
+EXPECTED_UV_VERSION = "0.11.26"
+EXPECTED_ACTION_REFS = {
+    "actions/cache": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+    "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+    "astral-sh/setup-uv": "fac544c07dec837d0ccb6301d7b5580bf5edae39",
+}
 
 
 def _workflow_text() -> str:
@@ -69,6 +74,19 @@ def test_workflow_actions_are_pinned_to_commit_shas() -> None:
     offenders = _unpinned_action_refs(_workflow_text())
 
     assert not offenders, "GitHub Action refs must be pinned to full SHAs:\n" + "\n".join(offenders)
+
+
+def test_workflow_actions_use_latest_reviewed_release_shas() -> None:
+    offenders: list[str] = []
+    for action_ref in USES_RE.findall(_workflow_text()):
+        action, ref = action_ref.rsplit("@", maxsplit=1)
+        expected = EXPECTED_ACTION_REFS.get(action)
+        if expected is None:
+            offenders.append(f"unreviewed action {action}")
+        elif ref != expected:
+            offenders.append(f"{action}@{ref} does not match reviewed SHA {expected}")
+
+    assert not offenders, "GitHub Action pins are stale:\n" + "\n".join(offenders)
 
 
 def test_action_ref_parser_handles_inline_comments() -> None:
