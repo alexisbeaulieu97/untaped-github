@@ -273,7 +273,6 @@ def test_verify_internal_dependencies_published_uses_testpypi_index_strategy(
 
 def test_smoke_console_checks_version_script_and_help(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     release = _load_helper()
     python_path = tmp_path / "venv" / "bin" / "python"
@@ -293,8 +292,6 @@ def test_smoke_console_checks_version_script_and_help(
     ) -> subprocess.CompletedProcess[str]:
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "0.12.5", "")
-
-    monkeypatch.setenv("RELEASE_VERSION", "0.12.5")
 
     release.smoke_console(
         package_name="untaped-github",

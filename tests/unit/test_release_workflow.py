@@ -58,8 +58,18 @@ def _workflow_step(job_name: str, name: str) -> dict[str, Any]:
     raise AssertionError(f"workflow step not found in {job_name}: {name}")
 
 
+def _workflow_steps_by_job() -> list[tuple[str, dict[str, Any]]]:
+    return [
+        (job_name, step) for job_name in _workflow()["jobs"] for step in _workflow_steps(job_name)
+    ]
+
+
 def _workflow_step_names(job_name: str) -> list[str]:
     return [step["name"] for step in _workflow_steps(job_name)]
+
+
+def _is_action(step: dict[str, Any], action: str) -> bool:
+    return str(step.get("uses", "")).startswith(f"{action}@")
 
 
 def _unpinned_action_refs(text: str) -> list[str]:
@@ -154,16 +164,39 @@ def test_action_ref_parser_catches_mutable_and_missing_refs() -> None:
 
 def test_release_checkout_does_not_persist_credentials() -> None:
     checkouts = [
-        step
-        for job_name in _workflow()["jobs"]
-        for step in _workflow_steps(job_name)
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for _job_name, step in _workflow_steps_by_job() if _is_action(step, "actions/checkout")
     ]
 
     assert checkouts
     for checkout in checkouts:
         assert checkout["uses"] == f"actions/checkout@{EXPECTED_ACTION_REFS['actions/checkout']}"
         assert checkout["with"]["persist-credentials"] is False
+
+
+def test_release_setup_uv_steps_pin_version_and_expected_cache_settings() -> None:
+    setup_steps = [
+        (job_name, step)
+        for job_name, step in _workflow_steps_by_job()
+        if _is_action(step, "astral-sh/setup-uv")
+    ]
+
+    assert setup_steps, "release workflow must contain astral-sh/setup-uv steps"
+    version_offenders = [
+        f"{job_name}:{step['name']}"
+        for job_name, step in setup_steps
+        if step["with"]["version"] != EXPECTED_UV_VERSION
+    ]
+    assert not version_offenders, (
+        f"setup-uv steps must pin uv {EXPECTED_UV_VERSION}:\n" + "\n".join(version_offenders)
+    )
+
+    cache_expectations = {
+        ("build", "Install uv"): True,
+        ("smoke-published", "Install uv"): True,
+    }
+    by_job_and_name = {(job_name, step["name"]): step for job_name, step in setup_steps}
+    for key, expected_cache in cache_expectations.items():
+        assert by_job_and_name[key]["with"]["enable-cache"] is expected_cache
 
 
 def test_release_workflow_keeps_anti_burn_guards() -> None:
