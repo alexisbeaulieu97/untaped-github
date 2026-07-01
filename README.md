@@ -11,7 +11,7 @@ untaped tool ships.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git
+uv tool install untaped-github
 ```
 
 ## Configure
@@ -73,7 +73,8 @@ uv run untaped-github --help
 ```
 
 See [AGENTS.md](./AGENTS.md) for architecture rules and GitHub-specific
-contracts.
+contracts. See [docs/release.md](./docs/release.md) for the PyPI/TestPyPI
+release workflow.
 
 ## Security
 

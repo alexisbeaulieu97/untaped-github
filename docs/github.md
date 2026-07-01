@@ -12,7 +12,7 @@ searches answer "what's mine?".
 ## Setup
 
 ```bash
-uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git
+uv tool install untaped-github
 untaped-github config set token ghp_xxx         # bare key → this tool's section
 untaped-github whoami                           # confirm it works
 ```

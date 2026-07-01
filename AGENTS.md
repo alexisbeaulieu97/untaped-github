@@ -71,6 +71,27 @@ position.
 15. **Finish with verification.** Run `uv run ruff check --fix`,
     `uv run ruff format`, `uv run mypy`, and `uv run pytest`.
 
+## Release Workflow
+
+`untaped-github` publishes to TestPyPI and PyPI from
+`.github/workflows/release.yml`. The workflow is manual-only, uses Trusted
+Publishing through `pypa/gh-action-pypi-publish`, and creates the GitHub
+release/tag only after a production PyPI publish and published-package smoke
+pass. Do not dispatch the workflow, create tags/releases, merge release PRs,
+or change PyPI/GitHub environments without explicit approval for that exact
+action.
+
+Development and CI keep the repo-local `untaped` git source pin. Release
+artifacts are built with `uv build --no-sources`, so published metadata comes
+from the dependency range. When changing the SDK floor, update the dependency
+range, `[tool.uv.sources].untaped.rev`, and `uv.lock` together so
+`uv sync --frozen` remains satisfiable.
+
+If a package upload succeeds but a later smoke or GitHub release step fails,
+the version is burned on that index. Do not rerun the same version workflow;
+recover only the missing side effect when appropriate, then fix the workflow
+or bump the patch version for another upload.
+
 ## Architecture
 
 ```text
