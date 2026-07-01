@@ -66,24 +66,7 @@ jobs:
       - name: Verify release version
         run: |
           set -euo pipefail
-          uv run python - <<'PY'
-          import os
-          import re
-          import sys
-          import tomllib
-          from pathlib import Path
-
-          expected = os.environ["RELEASE_VERSION"]
-          if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[A-Za-z0-9][A-Za-z0-9._+-]*)?", expected) is None:
-              print(f"error: unsafe or invalid release version input: {expected!r}", file=sys.stderr)
-              sys.exit(1)
-
-          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-          if version != expected:
-              print(f"error: workflow input version {expected!r} does not match pyproject.toml {version!r}", file=sys.stderr)
-              sys.exit(1)
-          print(f"ok: package metadata version matches workflow input {expected}")
-          PY
+          uv run python scripts/release.py verify-version "$RELEASE_VERSION"
 
       - name: Verify production release target is unused
         if: inputs.index == 'pypi'
@@ -91,28 +74,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo "::error::GitHub release v$RELEASE_VERSION already exists."
-            exit 1
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo "::error::Git tag v$RELEASE_VERSION already exists on origin."
-            exit 1
-          fi
+          uv run python scripts/release.py verify-target-unused "$RELEASE_VERSION"
 
       - name: Verify SDK dependency resolves from selected index
         run: |
           set -euo pipefail
-          if [ "$RELEASE_INDEX" = "testpypi" ]; then
-            export UV_INDEX=https://test.pypi.org/simple/
-            export UV_INDEX_STRATEGY=unsafe-best-match
-          fi
-
-          uv run --no-project --refresh-package untaped --with 'untaped>=2.4.4,<3' python - <<'PY'
-          import importlib.metadata as metadata
-
-          print(f"ok: untaped {metadata.version('untaped')} resolves from selected index")
-          PY
+          uv run python scripts/release.py verify-sdk-published --index "$RELEASE_INDEX"
 
       - name: Pre-commit hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure

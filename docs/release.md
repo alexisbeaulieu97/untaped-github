@@ -32,6 +32,9 @@ reuse an existing tag or GitHub release, that `untaped>=2.4.4,<3` resolves from
 the selected install path, and that the built wheel installs the
 `untaped-github` console script.
 
+TestPyPI publishes and smokes only. PyPI publishes, smokes, then creates the GitHub
+tag/release after the published-package smoke passes.
+
 ## Dependency Pins
 
 Development and CI intentionally keep the `untaped` git source pin. The
@@ -44,8 +47,9 @@ When raising the SDK floor, update these in the same PR:
 - `[tool.uv.sources].untaped.rev`: `v<version>`
 - `uv.lock`
 
-The source rev and dependency floor must agree so `uv sync --frozen` remains
-satisfiable before publishing.
+The release helper reads the SDK floor from `pyproject.toml`; do not duplicate
+it in workflow YAML. The source rev and dependency floor must agree so
+`uv sync --frozen` remains satisfiable before publishing.
 
 ## Burn Recovery
 

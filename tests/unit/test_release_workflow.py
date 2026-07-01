@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
@@ -23,10 +26,16 @@ EXPECTED_ACTION_REFS = {
     "astral-sh/setup-uv": "fac544c07dec837d0ccb6301d7b5580bf5edae39",
     "pypa/gh-action-pypi-publish": "cef221092ed1bacb1cc03d23a2d87d1d172e277b",
 }
+USES_RE = re.compile(r"^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?\s*$", re.MULTILINE)
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _workflow_text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _workflow() -> dict[str, Any]:
+    return yaml.safe_load(_workflow_text())
 
 
 def _step_block(name: str) -> str:
@@ -38,11 +47,27 @@ def _step_block(name: str) -> str:
     return match.group(0)
 
 
-def _uses_refs(text: str) -> list[tuple[str, str]]:
-    refs: list[tuple[str, str]] = []
-    for match in re.finditer(r"^\s*uses:\s+([^@\s]+)@([0-9a-f]{40})\s*$", text, re.MULTILINE):
-        refs.append((match.group(1), match.group(2)))
-    return refs
+def _workflow_steps(job_name: str) -> list[dict[str, Any]]:
+    return list(_workflow()["jobs"][job_name]["steps"])
+
+
+def _workflow_step(job_name: str, name: str) -> dict[str, Any]:
+    for step in _workflow_steps(job_name):
+        if step["name"] == name:
+            return step
+    raise AssertionError(f"workflow step not found in {job_name}: {name}")
+
+
+def _unpinned_action_refs(text: str) -> list[str]:
+    offenders: list[str] = []
+    for action_ref in USES_RE.findall(text):
+        if "@" not in action_ref:
+            offenders.append(action_ref)
+            continue
+        _, ref = action_ref.rsplit("@", maxsplit=1)
+        if not FULL_SHA_RE.fullmatch(ref):
+            offenders.append(action_ref)
+    return offenders
 
 
 def test_project_metadata_declares_initial_pypi_release_contract() -> None:
@@ -59,26 +84,50 @@ def test_project_metadata_declares_initial_pypi_release_contract() -> None:
 
 
 def test_release_workflow_dispatch_concurrency_and_permissions() -> None:
-    text = _workflow_text()
+    workflow = _workflow()
 
-    assert "workflow_dispatch:" in text
-    assert "version:" in text
-    assert "index:" in text
-    assert "- testpypi" in text
-    assert "- pypi" in text
-    assert "permissions:\n  contents: read" in text
-    assert "group: ${{ github.workflow }}-${{ inputs.index }}-${{ inputs.version }}" in text
-    assert "cancel-in-progress: false" in text
-    assert "environment: ${{ inputs.index }}" in text
-    assert "id-token: write" in text
+    dispatch = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert dispatch["version"]["type"] == "string"
+    assert dispatch["index"]["options"] == ["testpypi", "pypi"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {
+        "group": "${{ github.workflow }}-${{ inputs.index }}-${{ inputs.version }}",
+        "cancel-in-progress": False,
+    }
+
+    jobs = workflow["jobs"]
+    assert jobs["build"]["permissions"] == {"contents": "read"}
+    assert "id-token" not in jobs["build"]["permissions"]
+    assert "environment" not in jobs["build"]
+
+    assert jobs["publish"]["needs"] == "build"
+    assert jobs["publish"]["environment"] == "${{ inputs.index }}"
+    assert jobs["publish"]["permissions"] == {"contents": "read", "id-token": "write"}
+
+    assert jobs["smoke-published"]["needs"] == "publish"
+    assert jobs["smoke-published"]["permissions"] == {"contents": "read"}
+    assert "id-token" not in jobs["smoke-published"]["permissions"]
+    assert "environment" not in jobs["smoke-published"]
+
+    assert jobs["github-release"]["needs"] == "smoke-published"
+    assert jobs["github-release"]["if"] == "inputs.index == 'pypi'"
+    assert jobs["github-release"]["permissions"] == {"contents": "write"}
+    assert "id-token" not in jobs["github-release"]["permissions"]
+    assert "environment" not in jobs["github-release"]
 
 
 def test_release_workflow_uses_latest_reviewed_action_shas() -> None:
     text = _workflow_text()
     offenders: list[str] = []
-    refs = _uses_refs(text)
+    unpinned = _unpinned_action_refs(text)
+    assert not unpinned, "release workflow actions must be pinned to full SHAs:\n" + "\n".join(
+        unpinned
+    )
+
+    refs = USES_RE.findall(text)
     assert refs, "release workflow must use pinned actions"
-    for action, ref in refs:
+    for action_ref in refs:
+        action, ref = action_ref.rsplit("@", maxsplit=1)
         expected = EXPECTED_ACTION_REFS.get(action)
         if expected is None:
             offenders.append(f"unreviewed action {action}")
@@ -86,6 +135,24 @@ def test_release_workflow_uses_latest_reviewed_action_shas() -> None:
             offenders.append(f"{action}@{ref} does not match reviewed SHA {expected}")
 
     assert not offenders, "GitHub Action pins are stale:\n" + "\n".join(offenders)
+
+
+def test_action_ref_parser_catches_mutable_and_missing_refs() -> None:
+    sha = "a" * 40
+    workflow = f"""
+      - uses: actions/checkout@{sha}
+      - uses: astral-sh/setup-uv@v8
+      - uses: actions/cache
+"""
+
+    assert _unpinned_action_refs(workflow) == ["astral-sh/setup-uv@v8", "actions/cache"]
+
+
+def test_release_checkout_does_not_persist_credentials() -> None:
+    checkout = _workflow_step("build", "Checkout")
+
+    assert checkout["uses"] == f"actions/checkout@{EXPECTED_ACTION_REFS['actions/checkout']}"
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_release_workflow_keeps_anti_burn_guards() -> None:
@@ -97,15 +164,13 @@ def test_release_workflow_keeps_anti_burn_guards() -> None:
     assert "exit 1" in production_guard
 
     version_guard = _step_block("Verify release version")
-    assert "pyproject.toml" in version_guard
-    assert "RELEASE_VERSION" in version_guard
-    assert "does not match pyproject.toml" in version_guard
+    assert 'uv run python scripts/release.py verify-version "$RELEASE_VERSION"' in version_guard
 
     unused_guard = _step_block("Verify production release target is unused")
     assert "if: inputs.index == 'pypi'" in unused_guard
-    assert 'gh release view "v$RELEASE_VERSION"' in unused_guard
-    assert 'git ls-remote --exit-code --tags origin "refs/tags/v$RELEASE_VERSION"' in unused_guard
-    assert "already exists" in unused_guard
+    assert (
+        'uv run python scripts/release.py verify-target-unused "$RELEASE_VERSION"' in unused_guard
+    )
 
     step_pattern = r"(?ms)^      - name: .+?(?=^      - name: |^  [a-zA-Z0-9_-]+:|\Z)"
     run_blocks = "\n".join(
@@ -136,10 +201,14 @@ def test_release_workflow_validates_build_and_tool_local_wheel_smoke() -> None:
 def test_release_workflow_checks_sdk_floor_on_selected_index() -> None:
     sdk_check = _step_block("Verify SDK dependency resolves from selected index")
 
-    assert "untaped>=2.4.4,<3" in sdk_check
-    assert "UV_INDEX=https://test.pypi.org/simple/" in sdk_check
-    assert "UV_INDEX_STRATEGY=unsafe-best-match" in sdk_check
-    assert "--refresh-package untaped" in sdk_check
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+    sdk_requirement = next(dep for dep in project["dependencies"] if dep.startswith("untaped"))
+    assert sdk_requirement == "untaped>=2.4.4,<3"
+    assert (
+        'uv run python scripts/release.py verify-sdk-published --index "$RELEASE_INDEX"'
+        in sdk_check
+    )
+    assert sdk_requirement not in sdk_check
     assert "version may be burned" not in sdk_check.lower()
 
 
@@ -185,11 +254,15 @@ def test_release_docs_and_skill_prefer_pypi_install_and_explain_recovery() -> No
     for path in (README, COMMAND_DOC, SKILL):
         text = path.read_text(encoding="utf-8")
         assert "uv tool install untaped-github" in text
-        assert "git+https://github.com/alexisbeaulieu97/untaped-github.git" not in text
+        assert "git+https://github.com/alexisbeaulieu97/untaped-github.git" in text
+        assert "first PyPI release" in text
 
     release_doc = RELEASE_DOC.read_text(encoding="utf-8")
+    normalized_release_doc = " ".join(release_doc.split())
     assert "Trusted Publisher" in release_doc
     assert "testpypi" in release_doc
     assert "pypi" in release_doc
     assert "burned" in release_doc
     assert "Do not rerun" in release_doc
+    assert "TestPyPI publishes and smokes only" in release_doc
+    assert "PyPI publishes, smokes, then creates the GitHub tag/release" in normalized_release_doc

@@ -14,6 +14,13 @@ untaped tool ships.
 uv tool install untaped-github
 ```
 
+<!-- remove source fallback after first PyPI release -->
+Until the first PyPI release is available, install from source:
+
+```bash
+uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git
+```
+
 ## Configure
 
 ```bash
