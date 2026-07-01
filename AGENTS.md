@@ -87,6 +87,10 @@ from the dependency range. When changing the SDK floor, update the dependency
 range, `[tool.uv.sources].untaped.rev`, and `uv.lock` together so
 `uv sync --frozen` remains satisfiable.
 
+The release helper reads internal `untaped*` dependency floors from
+`pyproject.toml` and verifies they resolve from the selected index before
+publishing. Do not duplicate those floors in workflow YAML.
+
 If a package upload succeeds but a later smoke or GitHub release step fails,
 the version is burned on that index. Do not rerun the same version workflow;
 recover only the missing side effect when appropriate, then fix the workflow

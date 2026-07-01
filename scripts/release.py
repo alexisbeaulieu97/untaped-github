@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import subprocess
 import sys
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,9 +15,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised by monkeypatch.
+    tomllib = None  # type: ignore[assignment]
+
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[A-Za-z0-9][A-Za-z0-9._+-]*)?")
+TESTPYPI_INDEX = "https://test.pypi.org/simple/"
 
 
 class ReleaseCheckError(RuntimeError):
@@ -113,32 +119,56 @@ def check_git_tag_absent(
     )
 
 
-def verify_sdk_published(
+def verify_internal_dependencies_published(
     index: str,
     *,
     pyproject_path: Path = PYPROJECT,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> None:
-    """Verify the configured SDK requirement resolves from the selected install path."""
-    requirement = sdk_requirement(pyproject_path)
+    """Verify internal untaped dependencies resolve from the selected install path."""
+    requirements = internal_dependency_requirements(pyproject_path)
+    if not requirements:
+        print("ok: no internal untaped dependencies declared")
+        return
+
     env = os.environ.copy()
     if index == "testpypi":
-        env["UV_INDEX"] = "https://test.pypi.org/simple/"
+        env["UV_INDEX"] = TESTPYPI_INDEX
         env["UV_INDEX_STRATEGY"] = "unsafe-best-match"
     elif index != "pypi":
         raise ReleaseCheckError(f"unknown release index: {index}")
 
+    for requirement in requirements:
+        package_name = _dependency_name(requirement)
+        _verify_dependency_published(
+            package_name=package_name,
+            requirement=requirement,
+            index=index,
+            env=env,
+            runner=runner,
+        )
+    print(f"ok: {len(requirements)} internal dependencies resolve from {index}")
+
+
+def _verify_dependency_published(
+    *,
+    package_name: str,
+    requirement: str,
+    index: str,
+    env: dict[str, str],
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> None:
     command = [
         "uv",
         "run",
         "--no-project",
         "--refresh-package",
-        "untaped",
+        package_name,
         "--with",
         requirement,
         "python",
         "-c",
-        "import importlib.metadata as m; print(m.version('untaped'))",
+        f"import importlib.metadata as m; print(m.version({package_name!r}))",
     ]
     completed = runner(
         command,
@@ -151,26 +181,121 @@ def verify_sdk_published(
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise ReleaseCheckError(f"{requirement} is not available from {index}: {detail}")
-    print(f"ok: {requirement} resolves from {index}")
 
 
-def sdk_requirement(pyproject_path: Path = PYPROJECT) -> str:
-    """Return the untaped SDK requirement from project dependencies."""
-    for dependency in _project_metadata(pyproject_path)["dependencies"]:
-        if _dependency_name(str(dependency)) == "untaped":
-            return str(dependency)
-    raise ReleaseCheckError("pyproject.toml does not declare an untaped dependency")
+def internal_dependency_requirements(pyproject_path: Path = PYPROJECT) -> list[str]:
+    """Return internal untaped dependency requirements from project metadata."""
+    project = _project_metadata(pyproject_path)
+    self_name = _normalize_package_name(str(project["name"]))
+    requirements: list[str] = []
+    for dependency in project["dependencies"]:
+        requirement = str(dependency)
+        dependency_name = _dependency_name(requirement)
+        if dependency_name.startswith("untaped") and dependency_name != self_name:
+            requirements.append(requirement)
+    return requirements
+
+
+def smoke_console(
+    *,
+    package_name: str,
+    version: str,
+    python_path: Path,
+    console_script: Path,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    """Smoke a package install by checking metadata, console script, and help."""
+    if not python_path.exists():
+        raise ReleaseCheckError(f"expected Python interpreter was missing: {python_path}")
+    if not console_script.exists():
+        raise ReleaseCheckError(f"expected console script was missing: {console_script}")
+    if not os.access(console_script, os.X_OK):
+        raise ReleaseCheckError(f"expected console script is not executable: {console_script}")
+
+    version_check = runner(
+        [
+            str(python_path),
+            "-c",
+            (f"import importlib.metadata as metadata; print(metadata.version({package_name!r}))"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if version_check.returncode != 0:
+        detail = version_check.stderr.strip() or version_check.stdout.strip()
+        raise ReleaseCheckError(f"could not read installed {package_name} metadata: {detail}")
+
+    actual = version_check.stdout.strip()
+    if actual != version:
+        raise ReleaseCheckError(
+            f"installed {package_name} version {actual!r} did not match {version!r}"
+        )
+
+    help_check = runner(
+        [str(console_script), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if help_check.returncode != 0:
+        detail = help_check.stderr.strip() or help_check.stdout.strip()
+        raise ReleaseCheckError(f"{console_script.name} --help failed: {detail}")
+    print(f"ok: {package_name} {version} console script smoke passed")
 
 
 def _dependency_name(requirement: str) -> str:
     match = re.match(r"([A-Za-z0-9_.-]+)", requirement)
     if match is None:
         return ""
-    return match.group(1).replace("_", "-").replace(".", "-").lower()
+    return _normalize_package_name(match.group(1))
+
+
+def _normalize_package_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _project_metadata(pyproject_path: Path) -> dict[str, Any]:
-    return tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["project"]
+    text = pyproject_path.read_text(encoding="utf-8")
+    if tomllib is not None:
+        return tomllib.loads(text)["project"]
+    return _parse_project_metadata(text)
+
+
+def _parse_project_metadata(text: str) -> dict[str, Any]:
+    """Parse the project metadata subset needed by pre-sync release checks."""
+    project_lines: list[str] = []
+    in_project = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "[project]":
+            in_project = True
+            continue
+        if in_project and stripped.startswith("[") and stripped.endswith("]"):
+            break
+        if in_project:
+            project_lines.append(line)
+
+    project: dict[str, Any] = {}
+    index = 0
+    while index < len(project_lines):
+        stripped = project_lines[index].strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            index += 1
+            continue
+
+        key, raw_value = [part.strip() for part in stripped.split("=", maxsplit=1)]
+        if key in {"name", "version"}:
+            project[key] = ast.literal_eval(raw_value)
+        elif key == "dependencies":
+            value_lines = [raw_value]
+            while "]" not in value_lines[-1]:
+                index += 1
+                value_lines.append(project_lines[index].strip())
+            project[key] = ast.literal_eval("\n".join(value_lines))
+        index += 1
+
+    return project
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -184,8 +309,14 @@ def main(argv: list[str] | None = None) -> int:
     verify_target_parser = subparsers.add_parser("verify-target-unused")
     verify_target_parser.add_argument("version")
 
-    verify_sdk_parser = subparsers.add_parser("verify-sdk-published")
-    verify_sdk_parser.add_argument("--index", choices=["testpypi", "pypi"], required=True)
+    verify_internal_deps_parser = subparsers.add_parser("verify-internal-dependencies-published")
+    verify_internal_deps_parser.add_argument("--index", choices=["testpypi", "pypi"], required=True)
+
+    smoke_console_parser = subparsers.add_parser("smoke-console")
+    smoke_console_parser.add_argument("--package", required=True)
+    smoke_console_parser.add_argument("--version", required=True)
+    smoke_console_parser.add_argument("--venv", type=Path, required=True)
+    smoke_console_parser.add_argument("--console-script", required=True)
 
     args = parser.parse_args(argv)
     try:
@@ -193,8 +324,15 @@ def main(argv: list[str] | None = None) -> int:
             verify_version(args.version)
         elif args.command == "verify-target-unused":
             verify_target_unused(args.version)
-        elif args.command == "verify-sdk-published":
-            verify_sdk_published(args.index)
+        elif args.command == "verify-internal-dependencies-published":
+            verify_internal_dependencies_published(args.index)
+        elif args.command == "smoke-console":
+            smoke_console(
+                package_name=args.package,
+                version=args.version,
+                python_path=args.venv / "bin" / "python",
+                console_script=args.venv / "bin" / args.console_script,
+            )
         else:  # pragma: no cover - argparse enforces choices.
             parser.error(f"unknown command: {args.command}")
     except ReleaseCheckError as error:

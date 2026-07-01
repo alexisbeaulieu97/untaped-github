@@ -24,16 +24,22 @@ def _load_helper() -> ModuleType:
     return module
 
 
-def _pyproject(tmp_path: Path, dependency: str = "untaped>=2.4.4,<3") -> Path:
+def _pyproject(
+    tmp_path: Path,
+    *,
+    name: str = "untaped-github",
+    dependencies: list[str] | None = None,
+) -> Path:
+    dependencies = dependencies or ["untaped>=2.4.4,<3"]
     path = tmp_path / "pyproject.toml"
     path.write_text(
         "\n".join(
             [
                 "[project]",
-                'name = "untaped-github"',
+                f'name = "{name}"',
                 'version = "0.12.5"',
                 "dependencies = [",
-                f'    "{dependency}",',
+                *[f'    "{dependency}",' for dependency in dependencies],
                 "]",
                 "",
             ]
@@ -77,6 +83,25 @@ def test_verify_version_matches_pyproject_and_rejects_unsafe_input(tmp_path: Pat
         release.verify_version("0.12.6", pyproject_path=pyproject)
     with pytest.raises(release.ReleaseCheckError, match="unsafe or invalid"):
         release.verify_version("0.12.5; echo injected", pyproject_path=pyproject)
+
+
+def test_project_metadata_fallback_works_without_tomllib(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _load_helper()
+    pyproject = _pyproject(
+        tmp_path,
+        name="untaped-ansible",
+        dependencies=["untaped>=2.4.4,<3", "untaped-github>=0.12.5,<0.13"],
+    )
+    monkeypatch.setattr(release, "tomllib", None)
+
+    release.verify_version("0.12.5", pyproject_path=pyproject)
+    assert release.internal_dependency_requirements(pyproject) == [
+        "untaped>=2.4.4,<3",
+        "untaped-github>=0.12.5,<0.13",
+    ]
 
 
 def test_github_release_check_fails_when_release_exists() -> None:
@@ -164,16 +189,54 @@ def test_git_tag_check_maps_exit_codes_fail_closed() -> None:
     ]
 
 
-def test_sdk_requirement_is_read_from_pyproject(tmp_path: Path) -> None:
+def test_internal_dependencies_are_read_from_pyproject_and_exclude_self(
+    tmp_path: Path,
+) -> None:
     release = _load_helper()
-    pyproject = _pyproject(tmp_path, "untaped>=2.5.0,<3")
+    pyproject = _pyproject(
+        tmp_path,
+        name="untaped-ansible",
+        dependencies=[
+            "cyclopts>=4.16.0,<5",
+            "untaped>=2.4.4,<3",
+            "untaped-github>=0.12.5,<0.13",
+            "untaped-ansible>=0.11.1",
+        ],
+    )
 
-    assert release.sdk_requirement(pyproject) == "untaped>=2.5.0,<3"
+    assert release.internal_dependency_requirements(pyproject) == [
+        "untaped>=2.4.4,<3",
+        "untaped-github>=0.12.5,<0.13",
+    ]
 
 
-def test_verify_sdk_published_uses_testpypi_index_strategy(tmp_path: Path) -> None:
+def test_internal_dependency_matching_normalizes_names(tmp_path: Path) -> None:
     release = _load_helper()
-    pyproject = _pyproject(tmp_path)
+    pyproject = _pyproject(
+        tmp_path,
+        name="untaped.github",
+        dependencies=[
+            "Untaped>=2.4.4,<3",
+            "untaped_github>=0.12.5",
+            "untaped-workspace>=0.10.1",
+        ],
+    )
+
+    assert release.internal_dependency_requirements(pyproject) == [
+        "Untaped>=2.4.4,<3",
+        "untaped-workspace>=0.10.1",
+    ]
+
+
+def test_verify_internal_dependencies_published_uses_testpypi_index_strategy(
+    tmp_path: Path,
+) -> None:
+    release = _load_helper()
+    pyproject = _pyproject(
+        tmp_path,
+        name="untaped-ansible",
+        dependencies=["untaped>=2.4.4,<3", "untaped-github>=0.12.5,<0.13"],
+    )
     calls: list[tuple[list[str], dict[str, str]]] = []
 
     def runner(
@@ -188,11 +251,74 @@ def test_verify_sdk_published_uses_testpypi_index_strategy(tmp_path: Path) -> No
         calls.append((command, env))
         return subprocess.CompletedProcess(command, 0, "2.4.4", "")
 
-    release.verify_sdk_published("testpypi", pyproject_path=pyproject, runner=runner)
+    release.verify_internal_dependencies_published(
+        "testpypi", pyproject_path=pyproject, runner=runner
+    )
 
-    command, env = calls[0]
-    assert command[:5] == ["uv", "run", "--no-project", "--refresh-package", "untaped"]
-    assert "--with" in command
-    assert "untaped>=2.4.4,<3" in command
-    assert env["UV_INDEX"] == "https://test.pypi.org/simple/"
-    assert env["UV_INDEX_STRATEGY"] == "unsafe-best-match"
+    assert len(calls) == 2
+    assert calls[0][0][:5] == ["uv", "run", "--no-project", "--refresh-package", "untaped"]
+    assert "untaped>=2.4.4,<3" in calls[0][0]
+    assert calls[1][0][:5] == [
+        "uv",
+        "run",
+        "--no-project",
+        "--refresh-package",
+        "untaped-github",
+    ]
+    assert "untaped-github>=0.12.5,<0.13" in calls[1][0]
+    for _command, env in calls:
+        assert env["UV_INDEX"] == "https://test.pypi.org/simple/"
+        assert env["UV_INDEX_STRATEGY"] == "unsafe-best-match"
+
+
+def test_smoke_console_checks_version_script_and_help(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _load_helper()
+    python_path = tmp_path / "venv" / "bin" / "python"
+    console_script = tmp_path / "venv" / "bin" / "untaped-github"
+    console_script.parent.mkdir(parents=True)
+    python_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    console_script.write_text("#!/bin/sh\n", encoding="utf-8")
+    console_script.chmod(0o755)
+    calls: list[list[str]] = []
+
+    def runner(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "0.12.5", "")
+
+    monkeypatch.setenv("RELEASE_VERSION", "0.12.5")
+
+    release.smoke_console(
+        package_name="untaped-github",
+        version="0.12.5",
+        python_path=python_path,
+        console_script=console_script,
+        runner=runner,
+    )
+
+    assert calls[0][0] == str(python_path)
+    assert "metadata.version('untaped-github')" in " ".join(calls[0])
+    assert calls[1] == [str(console_script), "--help"]
+
+
+def test_smoke_console_fails_when_console_script_missing(tmp_path: Path) -> None:
+    release = _load_helper()
+    python_path = tmp_path / "venv" / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    with pytest.raises(release.ReleaseCheckError, match="expected console script"):
+        release.smoke_console(
+            package_name="untaped-github",
+            version="0.12.5",
+            python_path=python_path,
+            console_script=tmp_path / "venv" / "bin" / "untaped-github",
+        )

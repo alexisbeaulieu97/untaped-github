@@ -60,13 +60,10 @@ jobs:
             exit 1
           fi
 
-      - name: Sync project
-        run: uv sync --frozen
-
       - name: Verify release version
         run: |
           set -euo pipefail
-          uv run python scripts/release.py verify-version "$RELEASE_VERSION"
+          python3 scripts/release.py verify-version "$RELEASE_VERSION"
 
       - name: Verify production release target is unused
         if: inputs.index == 'pypi'
@@ -74,12 +71,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          uv run python scripts/release.py verify-target-unused "$RELEASE_VERSION"
+          python3 scripts/release.py verify-target-unused "$RELEASE_VERSION"
 
-      - name: Verify SDK dependency resolves from selected index
+      - name: Verify internal dependencies resolve from selected index
         run: |
           set -euo pipefail
-          uv run python scripts/release.py verify-sdk-published --index "$RELEASE_INDEX"
+          python3 scripts/release.py verify-internal-dependencies-published --index "$RELEASE_INDEX"
+
+      - name: Sync project
+        run: uv sync --frozen
 
       - name: Pre-commit hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
@@ -103,23 +103,11 @@ jobs:
           uv venv --python 3.14 "$RUNNER_TEMP/local-wheel"
           uv pip install --python "$RUNNER_TEMP/local-wheel/bin/python" dist/*.whl
 
-          if [ ! -x "$RUNNER_TEMP/local-wheel/bin/untaped-github" ]; then
-            echo "error: the wheel did not install the expected untaped-github console script" >&2
-            exit 1
-          fi
-
-          "$RUNNER_TEMP/local-wheel/bin/python" - <<'PY'
-          import importlib.metadata as metadata
-          import os
-
-          expected = os.environ["RELEASE_VERSION"]
-          actual = metadata.version("untaped-github")
-          if actual != expected:
-              raise SystemExit(f"installed wheel version {actual} did not match {expected}")
-          print(f"ok: installed untaped-github {actual}")
-          PY
-
-          "$RUNNER_TEMP/local-wheel/bin/untaped-github" --help >/dev/null
+          python3 scripts/release.py smoke-console \
+            --package untaped-github \
+            --version "$RELEASE_VERSION" \
+            --venv "$RUNNER_TEMP/local-wheel" \
+            --console-script untaped-github
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -171,11 +159,16 @@ jobs:
       RELEASE_INDEX: ${{ inputs.index }}
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
           version: "0.11.26"
-          enable-cache: false
+          enable-cache: true
 
       - name: Smoke published package
         run: |
@@ -186,10 +179,9 @@ jobs:
           fi
 
           published_venv="$RUNNER_TEMP/published-wheel"
+          uv venv --python 3.14 "$published_venv"
           installed=0
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            rm -rf "$published_venv"
-            uv venv --python 3.14 "$published_venv"
             if uv pip install --python "$published_venv/bin/python" --refresh-package untaped-github "untaped-github==$RELEASE_VERSION"; then
               installed=1
               break
@@ -203,24 +195,15 @@ jobs:
             exit 1
           fi
 
-          if [ ! -x "$published_venv/bin/untaped-github" ]; then
-            echo "::error::The published package did not install the expected untaped-github console script."
+          if ! python3 scripts/release.py smoke-console \
+            --package untaped-github \
+            --version "$RELEASE_VERSION" \
+            --venv "$published_venv" \
+            --console-script untaped-github; then
+            echo "::error::Published package smoke failed."
             echo "::error::The version may be burned if upload succeeded; bump patch before retrying."
             exit 1
           fi
-
-          "$published_venv/bin/python" - <<'PY'
-          import importlib.metadata as metadata
-          import os
-
-          expected = os.environ["RELEASE_VERSION"]
-          actual = metadata.version("untaped-github")
-          if actual != expected:
-              raise SystemExit(f"published package version {actual} did not match {expected}")
-          print(f"ok: published untaped-github {actual}")
-          PY
-
-          "$published_venv/bin/untaped-github" --help >/dev/null
 
   github-release:
     needs: smoke-published

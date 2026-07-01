@@ -58,6 +58,10 @@ def _workflow_step(job_name: str, name: str) -> dict[str, Any]:
     raise AssertionError(f"workflow step not found in {job_name}: {name}")
 
 
+def _workflow_step_names(job_name: str) -> list[str]:
+    return [step["name"] for step in _workflow_steps(job_name)]
+
+
 def _unpinned_action_refs(text: str) -> list[str]:
     offenders: list[str] = []
     for action_ref in USES_RE.findall(text):
@@ -149,14 +153,22 @@ def test_action_ref_parser_catches_mutable_and_missing_refs() -> None:
 
 
 def test_release_checkout_does_not_persist_credentials() -> None:
-    checkout = _workflow_step("build", "Checkout")
+    checkouts = [
+        step
+        for job_name in _workflow()["jobs"]
+        for step in _workflow_steps(job_name)
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
 
-    assert checkout["uses"] == f"actions/checkout@{EXPECTED_ACTION_REFS['actions/checkout']}"
-    assert checkout["with"]["persist-credentials"] is False
+    assert checkouts
+    for checkout in checkouts:
+        assert checkout["uses"] == f"actions/checkout@{EXPECTED_ACTION_REFS['actions/checkout']}"
+        assert checkout["with"]["persist-credentials"] is False
 
 
 def test_release_workflow_keeps_anti_burn_guards() -> None:
     text = _workflow_text()
+    build_steps = _workflow_step_names("build")
 
     production_guard = _step_block("Guard production publish")
     assert "if: inputs.index == 'pypi'" in production_guard
@@ -164,12 +176,14 @@ def test_release_workflow_keeps_anti_burn_guards() -> None:
     assert "exit 1" in production_guard
 
     version_guard = _step_block("Verify release version")
-    assert 'uv run python scripts/release.py verify-version "$RELEASE_VERSION"' in version_guard
+    assert 'python3 scripts/release.py verify-version "$RELEASE_VERSION"' in version_guard
 
     unused_guard = _step_block("Verify production release target is unused")
     assert "if: inputs.index == 'pypi'" in unused_guard
-    assert (
-        'uv run python scripts/release.py verify-target-unused "$RELEASE_VERSION"' in unused_guard
+    assert 'python3 scripts/release.py verify-target-unused "$RELEASE_VERSION"' in unused_guard
+    assert build_steps.index("Verify release version") < build_steps.index("Sync project")
+    assert build_steps.index("Verify production release target is unused") < build_steps.index(
+        "Sync project"
     )
 
     step_pattern = r"(?ms)^      - name: .+?(?=^      - name: |^  [a-zA-Z0-9_-]+:|\Z)"
@@ -192,24 +206,26 @@ def test_release_workflow_validates_build_and_tool_local_wheel_smoke() -> None:
     assert "uv venv" in smoke
     assert "uv pip install" in smoke
     assert "dist/*.whl" in smoke
-    assert "bin/untaped-github" in smoke
-    assert '"$RUNNER_TEMP/local-wheel/bin/untaped-github" --help' in smoke
+    assert "smoke-console" in smoke
+    assert "--package untaped-github" in smoke
+    assert "--console-script untaped-github" in smoke
+    assert '--venv "$RUNNER_TEMP/local-wheel"' in smoke
     assert "untaped.api" not in smoke
     assert 'bin/untaped"' not in smoke
 
 
-def test_release_workflow_checks_sdk_floor_on_selected_index() -> None:
-    sdk_check = _step_block("Verify SDK dependency resolves from selected index")
+def test_release_workflow_checks_internal_dependency_floors_on_selected_index() -> None:
+    dependency_check = _step_block("Verify internal dependencies resolve from selected index")
 
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
     sdk_requirement = next(dep for dep in project["dependencies"] if dep.startswith("untaped"))
     assert sdk_requirement == "untaped>=2.4.4,<3"
     assert (
-        'uv run python scripts/release.py verify-sdk-published --index "$RELEASE_INDEX"'
-        in sdk_check
+        'python3 scripts/release.py verify-internal-dependencies-published --index "$RELEASE_INDEX"'
+        in dependency_check
     )
-    assert sdk_requirement not in sdk_check
-    assert "version may be burned" not in sdk_check.lower()
+    assert sdk_requirement not in dependency_check
+    assert "version may be burned" not in dependency_check.lower()
 
 
 def test_release_workflow_hands_artifacts_to_trusted_publisher() -> None:
@@ -226,13 +242,21 @@ def test_release_workflow_hands_artifacts_to_trusted_publisher() -> None:
 
 
 def test_release_workflow_smokes_published_tool_from_selected_index() -> None:
+    install_uv = _workflow_step("smoke-published", "Install uv")
     smoke = _step_block("Smoke published package")
 
+    assert install_uv["with"]["enable-cache"] is True
     assert "UV_INDEX=https://test.pypi.org/simple/" in smoke
     assert "UV_INDEX_STRATEGY=unsafe-best-match" in smoke
+    assert 'uv venv --python 3.14 "$published_venv"' in smoke
+    assert smoke.index('uv venv --python 3.14 "$published_venv"') < smoke.index("for attempt in")
+    assert 'rm -rf "$published_venv"' not in smoke
     assert "--refresh-package untaped-github" in smoke
     assert "untaped-github==$RELEASE_VERSION" in smoke
-    assert 'untaped-github" --help' in smoke
+    assert "smoke-console" in smoke
+    assert "--package untaped-github" in smoke
+    assert "--console-script untaped-github" in smoke
+    assert '--venv "$published_venv"' in smoke
     assert "version may be burned" in smoke.lower()
     assert "bump patch" in smoke.lower()
     assert "untaped.api" not in smoke
