@@ -10,7 +10,6 @@ Use this skill when the user wants an agent to operate the `untaped-github` CLI 
 ## Setup
 
 - `untaped-github` is a standalone CLI built on the untaped SDK. Install it with `uv tool install untaped-github`.
-- Until the first PyPI release is available, install from source with `uv tool install git+https://github.com/alexisbeaulieu97/untaped-github.git`.
 - Settings live under `profiles.<name>.github`: `base_url`, `token`, and `corpus_path`.
 - `base_url` defaults to `https://api.github.com`; GitHub Enterprise Server usually uses `https://HOST/api/v3`.
 - Set the token with `untaped-github config set token --prompt` or `--stdin` (a bare key addresses this tool's own section).

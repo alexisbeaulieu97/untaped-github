@@ -37,19 +37,18 @@ tag/release after the published-package smoke passes.
 
 ## Dependency Pins
 
-Development and CI intentionally keep the `untaped` git source pin. The
-published wheel metadata comes from the dependency range because release builds
-use `uv build --no-sources`.
+Development and CI resolve internal `untaped*` dependencies from PyPI; the
+repo keeps no standing `[tool.uv.sources]` git pins. The published wheel
+metadata comes from the dependency range because release builds use
+`uv build --no-sources`.
 
 When raising the SDK floor, update these in the same PR:
 
 - `project.dependencies`: `untaped>=<version>,<3`
-- `[tool.uv.sources].untaped.rev`: `v<version>`
 - `uv.lock`
 
 The release helper reads internal dependency floors from `pyproject.toml`; do
-not duplicate them in workflow YAML. Source revs and dependency floors must
-agree so `uv sync --frozen` remains satisfiable before publishing.
+not duplicate them in workflow YAML.
 
 ## Burn Recovery
 

@@ -82,10 +82,10 @@ pass. Do not dispatch the workflow, create tags/releases, merge release PRs,
 or change PyPI/GitHub environments without explicit approval for that exact
 action.
 
-Development and CI keep the repo-local `untaped` git source pin. Release
-artifacts are built with `uv build --no-sources`, so published metadata comes
-from the dependency range. When changing the SDK floor, update the dependency
-range, `[tool.uv.sources].untaped.rev`, and `uv.lock` together so
+Development and CI resolve `untaped` from PyPI; the repo keeps no standing
+git source pin. Release artifacts are built with `uv build --no-sources`, so
+published metadata comes from the dependency range. When changing the SDK
+floor, update the dependency range and `uv.lock` together so
 `uv sync --frozen` remains satisfiable.
 
 The release helper reads internal `untaped*` dependency floors from
