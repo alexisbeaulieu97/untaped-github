@@ -37,6 +37,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Checkout release tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: alexisbeaulieu97/untaped
+          ref: 07116cc11d4217283ad42badea4f5d5744542f2a
+          path: .release-tool
+          persist-credentials: false
+
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
@@ -63,7 +71,8 @@ jobs:
       - name: Verify release version
         run: |
           set -euo pipefail
-          python3 scripts/release.py verify-version "$RELEASE_VERSION"
+          python3 .release-tool/.github/release/release.py verify-version "$RELEASE_VERSION" \
+            --pyproject "$GITHUB_WORKSPACE/pyproject.toml"
 
       - name: Verify production release target is unused
         if: inputs.index == 'pypi'
@@ -71,12 +80,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 scripts/release.py verify-target-unused "$RELEASE_VERSION"
+          python3 .release-tool/.github/release/release.py verify-target-unused "$RELEASE_VERSION"
 
       - name: Verify internal dependencies resolve from selected index
         run: |
           set -euo pipefail
-          python3 scripts/release.py verify-internal-dependencies-published --index "$RELEASE_INDEX"
+          python3 .release-tool/.github/release/release.py verify-internal-dependencies-published \
+            --index "$RELEASE_INDEX" \
+            --pyproject "$GITHUB_WORKSPACE/pyproject.toml"
 
       - name: Sync project
         run: uv sync --frozen
@@ -103,7 +114,7 @@ jobs:
           uv venv --python 3.14 "$RUNNER_TEMP/local-wheel"
           uv pip install --python "$RUNNER_TEMP/local-wheel/bin/python" dist/*.whl
 
-          python3 scripts/release.py smoke-console \
+          python3 .release-tool/.github/release/release.py smoke-console \
             --package untaped-github \
             --version "$RELEASE_VERSION" \
             --venv "$RUNNER_TEMP/local-wheel" \
@@ -159,9 +170,12 @@ jobs:
       RELEASE_INDEX: ${{ inputs.index }}
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
-      - name: Checkout
+      - name: Checkout release tooling
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          repository: alexisbeaulieu97/untaped
+          ref: 07116cc11d4217283ad42badea4f5d5744542f2a
+          path: .release-tool
           persist-credentials: false
 
       - name: Install uv
@@ -195,7 +209,7 @@ jobs:
             exit 1
           fi
 
-          if ! python3 scripts/release.py smoke-console \
+          if ! python3 .release-tool/.github/release/release.py smoke-console \
             --package untaped-github \
             --version "$RELEASE_VERSION" \
             --venv "$published_venv" \
