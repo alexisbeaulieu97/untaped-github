@@ -18,7 +18,7 @@ RELEASE_DOC = REPO_ROOT / "docs" / "release.md"
 SKILL = REPO_ROOT / "src" / "untaped_github" / "skills" / "untaped-github" / "SKILL.md"
 
 EXPECTED_UV_VERSION = "0.11.26"
-CORE_RELEASE_TOOL_SHA = "96219eab2d573b280ffd1fadf1d5ab41e3919156"
+CORE_RELEASE_TOOL_SHA = "07116cc11d4217283ad42badea4f5d5744542f2a"
 EXPECTED_ACTION_REFS = {
     "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
     "actions/cache": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
