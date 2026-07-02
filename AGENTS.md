@@ -23,13 +23,14 @@ position.
    `src/untaped_github/skills/untaped-github/SKILL.md`.
 2. **Prefer `uv` commands over manual dependency edits.** Use `uv add` and
    `uv add --group dev`; hand-edit tool config only.
-3. **Expose the CLI through the SDK entry point.**
-   `untaped_github/__init__.py` re-exports the Cyclopts `app` (and the
-   public client API) so the SDK's launcher can mount it as the
-   `untaped-github` command. Keep the root API import-light:
-   `__init__.py` re-exports `app` only through a PEP 562 module
-   `__getattr__` so importing the package never eagerly imports the command
-   tree.
+3. **Expose the CLI through the SDK's `run_tool` entry point.**
+   The `untaped-github` console script is `untaped_github.__main__:main`,
+   which hands the Cyclopts `app` and a `ToolSpec` to the SDK's `run_tool`
+   (see § Tool entry point below). `untaped_github/__init__.py` re-exports
+   the `app` (and the public client API) for sibling tools. Keep the root
+   API import-light: `__init__.py` re-exports `app` only through a PEP 562
+   module `__getattr__` so importing the package never eagerly imports the
+   command tree.
 4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
    `infrastructure -> domain`; `application` and `infrastructure` must not
    import each other at runtime.
@@ -114,6 +115,19 @@ the Cyclopts `app` as the root command, and ships the packaged
 GitHub workflow changes. Command code reads typed settings with
 `app_context().section("github", GithubSettings)`, not a global
 aggregate `settings.github` attribute.
+
+## Tool entry point
+
+`untaped-github` is a standalone CLI. `__main__.main()` hands the Cyclopts
+`app` (from `untaped_github.cli`) and a `ToolSpec` to the SDK's `run_tool`.
+The `ToolSpec` declares `command="untaped-github"`, `section="github"`,
+`profile_model=GithubSettings`, and one `SkillAsset` for the packaged agent
+skill. `run_tool` mounts the shared `config` / `profile` / `skills` command
+groups, wires the `--profile` / `--verbose` / `--quiet` root options, and
+runs under the SDK's error contract. The console script is declared in
+`pyproject.toml` under `[project.scripts]` as
+`untaped-github = "untaped_github.__main__:main"`; there is no
+`untaped.plugins` entry point.
 
 ## Auth Model
 
