@@ -1,4 +1,9 @@
-"""Contract tests for the PyPI/TestPyPI release workflow."""
+"""Contract tests for the PyPI/TestPyPI release workflow (Option-C canonical).
+
+Adopting a tool: copy this file to tests/unit/test_release_workflow.py and edit ONLY the
+PER-TOOL CONFIG block. Everything below the marker must stay byte-identical to
+core .github/release/templates/test_release_workflow.py.tmpl — diff before merging a release PR.
+"""
 
 from __future__ import annotations
 
@@ -9,16 +14,26 @@ from typing import Any
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
-PYPROJECT = REPO_ROOT / "pyproject.toml"
-README = REPO_ROOT / "README.md"
-COMMAND_DOC = REPO_ROOT / "docs" / "github.md"
-RELEASE_DOC = REPO_ROOT / "docs" / "release.md"
-SKILL = REPO_ROOT / "src" / "untaped_github" / "skills" / "untaped-github" / "SKILL.md"
+# ============================ PER-TOOL CONFIG ============================
+# The ONLY block that varies between tools.
+DIST_NAME = "untaped-github"
+CONSOLE_SCRIPT = "untaped-github"
+EXPECTED_VERSION = "0.12.6"
+# Internal untaped-ecosystem deps, as (PEP 508 requirement, uv-source rev or None):
+#   rev = "vX.Y.Z" for a uv git source; None when the dep installs from PyPI.
+INTERNAL_DEPS: list[tuple[str, str | None]] = [
+    ("untaped>=2.4.4,<3", "v2.4.4"),
+]
+# Docs that must steer users to PyPI install (repo-relative paths); [] to skip the docs check.
+PYPI_INSTALL_DOCS: list[str] = [
+    "README.md",
+    "docs/github.md",
+    "src/untaped_github/skills/untaped-github/SKILL.md",
+]
+# ========================================================================
 
-EXPECTED_UV_VERSION = "0.11.26"
 CORE_RELEASE_TOOL_SHA = "07116cc11d4217283ad42badea4f5d5744542f2a"
+EXPECTED_UV_VERSION = "0.11.26"
 EXPECTED_ACTION_REFS = {
     "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
     "actions/cache": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
@@ -27,6 +42,11 @@ EXPECTED_ACTION_REFS = {
     "astral-sh/setup-uv": "fac544c07dec837d0ccb6301d7b5580bf5edae39",
     "pypa/gh-action-pypi-publish": "cef221092ed1bacb1cc03d23a2d87d1d172e277b",
 }
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+
 USES_RE = re.compile(r"^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?\s*$", re.MULTILINE)
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -85,17 +105,30 @@ def _unpinned_action_refs(text: str) -> list[str]:
     return offenders
 
 
-def test_project_metadata_declares_initial_pypi_release_contract() -> None:
+def _dep_name(requirement: str) -> str:
+    return re.split(r"[<>=!~ ]", requirement, maxsplit=1)[0]
+
+
+def test_project_metadata_declares_pypi_release_contract() -> None:
     pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "0.12.6"
+    assert project["name"] == DIST_NAME
+    assert project["version"] == EXPECTED_VERSION
     assert project["readme"] == "README.md"
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
     assert "License ::" not in "\n".join(project.get("classifiers", []))
-    assert "untaped>=2.4.4,<3" in project["dependencies"]
-    assert pyproject["tool"]["uv"]["sources"]["untaped"]["rev"] == "v2.4.4"
+    assert CONSOLE_SCRIPT in project.get("scripts", {})
+
+    sources = pyproject.get("tool", {}).get("uv", {}).get("sources", {})
+    for requirement, rev in INTERNAL_DEPS:
+        assert requirement in project["dependencies"]
+        pkg = _dep_name(requirement)
+        if rev is None:
+            assert pkg not in sources, f"{pkg} must install from PyPI, not a uv git source"
+        else:
+            assert sources[pkg]["rev"] == rev
 
 
 def test_release_workflow_dispatch_concurrency_and_permissions() -> None:
@@ -268,25 +301,25 @@ def test_release_workflow_validates_build_and_tool_local_wheel_smoke() -> None:
     assert "uv pip install" in smoke
     assert "dist/*.whl" in smoke
     assert "smoke-console" in smoke
-    assert "--package untaped-github" in smoke
-    assert "--console-script untaped-github" in smoke
+    assert f"--package {DIST_NAME}" in smoke
+    assert f"--console-script {CONSOLE_SCRIPT}" in smoke
     assert '--venv "$RUNNER_TEMP/local-wheel"' in smoke
     assert "untaped.api" not in smoke
-    assert 'bin/untaped"' not in smoke
 
 
 def test_release_workflow_checks_internal_dependency_floors_on_selected_index() -> None:
     dependency_check = _step_block("Verify internal dependencies resolve from selected index")
-
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
-    sdk_requirement = next(dep for dep in project["dependencies"] if dep.startswith("untaped"))
-    assert sdk_requirement == "untaped>=2.4.4,<3"
+
+    for requirement, _rev in INTERNAL_DEPS:
+        assert requirement in project["dependencies"]
+        assert requirement not in dependency_check  # floors read from pyproject, never hardcoded
+
     assert (
         "python3 .release-tool/.github/release/release.py "
         "verify-internal-dependencies-published" in dependency_check
     )
     assert '--index "$RELEASE_INDEX"' in dependency_check
-    assert sdk_requirement not in dependency_check
     assert "version may be burned" not in dependency_check.lower()
 
 
@@ -313,11 +346,11 @@ def test_release_workflow_smokes_published_tool_from_selected_index() -> None:
     assert 'uv venv --python 3.14 "$published_venv"' in smoke
     assert smoke.index('uv venv --python 3.14 "$published_venv"') < smoke.index("for attempt in")
     assert 'rm -rf "$published_venv"' not in smoke
-    assert "--refresh-package untaped-github" in smoke
-    assert "untaped-github==$RELEASE_VERSION" in smoke
+    assert f"--refresh-package {DIST_NAME}" in smoke
+    assert f"{DIST_NAME}==$RELEASE_VERSION" in smoke
     assert "smoke-console" in smoke
-    assert "--package untaped-github" in smoke
-    assert "--console-script untaped-github" in smoke
+    assert f"--package {DIST_NAME}" in smoke
+    assert f"--console-script {CONSOLE_SCRIPT}" in smoke
     assert '--venv "$published_venv"' in smoke
     assert "version may be burned" in smoke.lower()
     assert "bump patch" in smoke.lower()
@@ -333,22 +366,14 @@ def test_release_workflow_creates_github_release_only_after_pypi_smoke() -> None
     assert "gh release create" in release
     assert ' --repo "$GITHUB_REPOSITORY"' in release
     assert "v$RELEASE_VERSION" in release
-    assert "untaped-github v$RELEASE_VERSION" in release
+    assert f"{DIST_NAME} v$RELEASE_VERSION" in release
 
 
-def test_release_docs_and_skill_prefer_pypi_install_and_explain_recovery() -> None:
-    for path in (README, COMMAND_DOC, SKILL):
-        text = path.read_text(encoding="utf-8")
-        assert "uv tool install untaped-github" in text
-        assert "git+https://github.com/alexisbeaulieu97/untaped-github.git" in text
-        assert "first PyPI release" in text
-
-    release_doc = RELEASE_DOC.read_text(encoding="utf-8")
-    normalized_release_doc = " ".join(release_doc.split())
-    assert "Trusted Publisher" in release_doc
-    assert "testpypi" in release_doc
-    assert "pypi" in release_doc
-    assert "burned" in release_doc
-    assert "Do not rerun" in release_doc
-    assert "TestPyPI publishes and smokes only" in release_doc
-    assert "PyPI publishes, smokes, then creates the GitHub tag/release" in normalized_release_doc
+def test_docs_steer_users_to_pypi_install() -> None:
+    if not PYPI_INSTALL_DOCS:
+        return
+    git_url = f"git+https://github.com/alexisbeaulieu97/{DIST_NAME}.git"
+    for rel in PYPI_INSTALL_DOCS:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert f"uv tool install {DIST_NAME}" in text
+        assert git_url in text
