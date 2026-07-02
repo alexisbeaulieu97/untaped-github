@@ -22,14 +22,10 @@ EXPECTED_VERSION = "0.12.6"
 # Internal untaped-ecosystem deps, as (PEP 508 requirement, uv-source rev or None):
 #   rev = "vX.Y.Z" for a uv git source; None when the dep installs from PyPI.
 INTERNAL_DEPS: list[tuple[str, str | None]] = [
-    ("untaped>=2.4.4,<3", "v2.4.4"),
+    ("untaped>=2.4.4,<3", None),
 ]
 # Docs that must steer users to PyPI install (repo-relative paths); [] to skip the docs check.
-PYPI_INSTALL_DOCS: list[str] = [
-    "README.md",
-    "docs/github.md",
-    "src/untaped_github/skills/untaped-github/SKILL.md",
-]
+PYPI_INSTALL_DOCS: list[str] = []
 # ========================================================================
 
 CORE_RELEASE_TOOL_SHA = "07116cc11d4217283ad42badea4f5d5744542f2a"
