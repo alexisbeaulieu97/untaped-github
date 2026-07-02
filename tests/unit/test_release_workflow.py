@@ -18,6 +18,7 @@ RELEASE_DOC = REPO_ROOT / "docs" / "release.md"
 SKILL = REPO_ROOT / "src" / "untaped_github" / "skills" / "untaped-github" / "SKILL.md"
 
 EXPECTED_UV_VERSION = "0.11.26"
+CORE_RELEASE_TOOL_SHA = "96219eab2d573b280ffd1fadf1d5ab41e3919156"
 EXPECTED_ACTION_REFS = {
     "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
     "actions/cache": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
@@ -88,7 +89,7 @@ def test_project_metadata_declares_initial_pypi_release_contract() -> None:
     pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "0.12.5"
+    assert project["version"] == "0.12.6"
     assert project["readme"] == "README.md"
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
@@ -173,6 +174,27 @@ def test_release_checkout_does_not_persist_credentials() -> None:
         assert checkout["with"]["persist-credentials"] is False
 
 
+def test_release_tooling_is_sourced_from_pinned_core_checkout() -> None:
+    workflow = _workflow()
+
+    assert "uses" not in workflow["jobs"]["publish"]
+    assert workflow["jobs"]["publish"]["steps"]
+
+    tool_checkouts = [
+        step
+        for _job, step in _workflow_steps_by_job()
+        if _is_action(step, "actions/checkout")
+        and step.get("with", {}).get("repository") == "alexisbeaulieu97/untaped"
+    ]
+    assert len(tool_checkouts) == 2
+    for step in tool_checkouts:
+        assert step["with"]["ref"] == CORE_RELEASE_TOOL_SHA
+        assert step["with"]["path"] == ".release-tool"
+        assert step["with"]["persist-credentials"] is False
+
+    assert "scripts/release.py" not in _workflow_text()
+
+
 def test_release_setup_uv_steps_pin_version_and_expected_cache_settings() -> None:
     setup_steps = [
         (job_name, step)
@@ -209,11 +231,17 @@ def test_release_workflow_keeps_anti_burn_guards() -> None:
     assert "exit 1" in production_guard
 
     version_guard = _step_block("Verify release version")
-    assert 'python3 scripts/release.py verify-version "$RELEASE_VERSION"' in version_guard
+    assert (
+        'python3 .release-tool/.github/release/release.py verify-version "$RELEASE_VERSION"'
+        in version_guard
+    )
 
     unused_guard = _step_block("Verify production release target is unused")
     assert "if: inputs.index == 'pypi'" in unused_guard
-    assert 'python3 scripts/release.py verify-target-unused "$RELEASE_VERSION"' in unused_guard
+    assert (
+        'python3 .release-tool/.github/release/release.py verify-target-unused "$RELEASE_VERSION"'
+        in unused_guard
+    )
     assert build_steps.index("Verify release version") < build_steps.index("Sync project")
     assert build_steps.index("Verify production release target is unused") < build_steps.index(
         "Sync project"
@@ -254,9 +282,10 @@ def test_release_workflow_checks_internal_dependency_floors_on_selected_index() 
     sdk_requirement = next(dep for dep in project["dependencies"] if dep.startswith("untaped"))
     assert sdk_requirement == "untaped>=2.4.4,<3"
     assert (
-        'python3 scripts/release.py verify-internal-dependencies-published --index "$RELEASE_INDEX"'
-        in dependency_check
+        "python3 .release-tool/.github/release/release.py "
+        "verify-internal-dependencies-published" in dependency_check
     )
+    assert '--index "$RELEASE_INDEX"' in dependency_check
     assert sdk_requirement not in dependency_check
     assert "version may be burned" not in dependency_check.lower()
 
