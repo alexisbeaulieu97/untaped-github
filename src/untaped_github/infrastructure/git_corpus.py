@@ -178,22 +178,15 @@ class GitCorpusCache:
             )
         return None
 
-    def clean_repos(self, *, root: Path, repos: tuple[str, ...]) -> tuple[CorpusRepoResult, ...]:
-        """Remove selected repositories from the managed corpus root."""
+    def clean_repo(self, *, root: Path, repo: CorpusRepoResult) -> CorpusRepoResult:
+        """Remove one cached repository from the managed corpus root."""
         managed_root = root.expanduser().resolve()
-        rows = self.list_repos(root=root)
-        selected = set(repos)
-        removed: list[CorpusRepoResult] = []
-        for row in rows:
-            if selected and row.repo not in selected:
-                continue
-            bare = Path(row.path).expanduser().resolve()
-            if not bare.is_relative_to(managed_root):
-                raise GitCorpusError(f"refusing to remove path outside managed root: {bare}")
-            self._remove_managed_worktrees(bare, managed_root=managed_root)
-            shutil.rmtree(bare)
-            removed.append(row.model_copy(update={"status": "removed"}))
-        return tuple(removed)
+        bare = Path(repo.path).expanduser().resolve()
+        if not bare.is_relative_to(managed_root):
+            raise GitCorpusError(f"refusing to remove path outside managed root: {bare}")
+        self._remove_managed_worktrees(bare, managed_root=managed_root)
+        shutil.rmtree(bare)
+        return repo.model_copy(update={"status": "removed"})
 
     def materialize_worktree(
         self,

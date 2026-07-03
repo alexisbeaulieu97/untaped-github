@@ -44,7 +44,7 @@ metadata comes from the dependency range because release builds use
 
 When raising the SDK floor, update these in the same PR:
 
-- `project.dependencies`: `untaped>=<version>,<3`
+- `project.dependencies`: `untaped>=<version>,<4`
 - `uv.lock`
 
 The release helper reads internal dependency floors from `pyproject.toml`; do

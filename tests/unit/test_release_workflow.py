@@ -18,11 +18,11 @@ import yaml
 # The ONLY block that varies between tools.
 DIST_NAME = "untaped-github"
 CONSOLE_SCRIPT = "untaped-github"
-EXPECTED_VERSION = "0.12.6"
+EXPECTED_VERSION = "0.13.0"
 # Internal untaped-ecosystem deps, as (PEP 508 requirement, uv-source rev or None):
 #   rev = "vX.Y.Z" for a uv git source; None when the dep installs from PyPI.
 INTERNAL_DEPS: list[tuple[str, str | None]] = [
-    ("untaped>=2.4.4,<3", None),
+    ("untaped>=3.0.0,<4", None),
 ]
 # Docs that must steer users to PyPI install (repo-relative paths); [] to skip the docs check.
 PYPI_INSTALL_DOCS: list[str] = []

@@ -132,14 +132,9 @@ class _Corpus:
             },
         )()
 
-    def clean_repos(self, *, root: Path, repos: tuple[str, ...]) -> tuple[CorpusRepoResult, ...]:
-        selected = repos or tuple(sorted(self.cached))
-        for repo in selected:
-            self.cached.discard(repo)
-        return tuple(
-            CorpusRepoResult(repo=repo, ref="main", path=str(root / repo), status="removed")
-            for repo in selected
-        )
+    def clean_repo(self, *, root: Path, repo: CorpusRepoResult) -> CorpusRepoResult:
+        self.cached.discard(repo.repo)
+        return repo.model_copy(update={"status": "removed"})
 
     def materialize_worktree(
         self,
@@ -208,7 +203,7 @@ def test_list_clean_and_worktree_delegate_to_corpus(tmp_path: Path) -> None:
     corpus = _Corpus(cached={"acme/api", "acme/worker"})
 
     listed = ListCorpus(corpus)(root=tmp_path / "corpus")
-    cleaned = CleanCorpus(corpus)(root=tmp_path / "corpus", repos=("acme/api",))
+    cleaned = CleanCorpus(corpus)(root=tmp_path / "corpus", repo=listed[0])
     worktree = WorktreeCorpus(corpus)(
         "acme/worker",
         root=tmp_path / "corpus",
@@ -216,7 +211,7 @@ def test_list_clean_and_worktree_delegate_to_corpus(tmp_path: Path) -> None:
     )
 
     assert [row.repo for row in listed] == ["acme/api", "acme/worker"]
-    assert [row.repo for row in cleaned] == ["acme/api"]
+    assert cleaned.repo == "acme/api"
     assert worktree == WorktreeResult(
         repo="acme/worker",
         ref="main",

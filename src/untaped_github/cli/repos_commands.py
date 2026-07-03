@@ -11,8 +11,7 @@ from untaped.api import (
     ConfigError,
     FormatOption,
     create_app,
-    echo,
-    render_rows,
+    emit,
     report_errors,
 )
 
@@ -95,12 +94,10 @@ def list_command(
                     team_scopes=team_scopes,
                 )
             ]
-        rendered = render_rows(
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
             kind="github.repo",
             empty="No repositories found. Broaden your pattern or scope filters.",
         )
-        if rendered:
-            echo(rendered)

@@ -99,9 +99,7 @@ class GitCorpus(Protocol):
 
     def get_repo(self, *, root: Path, repo: str) -> CorpusRepoTarget | None: ...
 
-    def clean_repos(
-        self, *, root: Path, repos: tuple[str, ...]
-    ) -> tuple[CorpusRepoResult, ...]: ...
+    def clean_repo(self, *, root: Path, repo: CorpusRepoResult) -> CorpusRepoResult: ...
 
     def materialize_worktree(
         self,

@@ -147,7 +147,7 @@ untaped-github scan grep 'uses: acme/action' --team acme/backend --sync
 untaped-github scan grep 'BaseModel' --org acme --path pyproject.toml
 untaped-github scan list
 untaped-github scan worktree acme/api --format raw --columns path
-untaped-github scan clean --repo acme/api
+untaped-github scan clean --repo acme/api -y
 untaped-github scan clean --all --yes
 ```
 
@@ -177,7 +177,7 @@ Supported grep filters are intentionally small in v1:
 | `--word-regexp`/`-w` | Match only whole words. |
 | `--parallel`/`-j` | Parallel Git workers, capped at 32. |
 
-`scan grep` emits `github.codehit` pipe records with stable fields:
+`scan grep` emits `github.code_hit` pipe records with stable fields:
 `repo`, `ref`, `path`, `line`, `column`, and `text`. `column` is the first
 match on the matching line. V1 does not emit a separate `match` substring
 because `git grep` cannot reliably provide substring, full line, line number,
@@ -193,10 +193,11 @@ workspaces remain the job of `untaped-workspace`; the scan corpus is optimized
 for local scans, not active development.
 
 `scan list` and `scan clean` inspect and prune the managed corpus. `scan clean`
-requires either `--repo OWNER/NAME` or `--all --yes`, removes associated
-managed worktrees before deleting a bare repo, and only removes paths under the
-configured corpus root. `scan list` skips corrupt cache metadata with a warning
-so healthy cache entries remain visible.
+requires either `--repo OWNER/NAME` or `--all`; both paths prompt before
+deleting unless `--yes`/`-y` is passed. It removes associated managed worktrees
+before deleting a bare repo and only removes paths under the configured corpus
+root. `scan list` skips corrupt cache metadata with a warning so healthy cache
+entries remain visible.
 
 V1 sync is default-branch-only and authenticated Git transport is HTTPS-only.
 All-branch/tag scans, SSH transport, ripgrep-native structured scanning, and

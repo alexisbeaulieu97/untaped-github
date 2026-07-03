@@ -2,7 +2,7 @@
 
 Four subcommands, one per GitHub search endpoint. Each builds a frozen
 filter object from CLI flags, hands it to its use case, and pipes the
-result through core's ``render_rows`` helper. Composition lives here;
+result through core's ``emit`` helper. Composition lives here;
 the use cases own the orchestration.
 """
 
@@ -16,8 +16,8 @@ from untaped.api import (
     FormatOption,
     create_app,
     echo,
+    emit,
     read_identifiers,
-    render_rows,
     report_errors,
 )
 
@@ -125,15 +125,13 @@ def repos_command(
             team_scopes = parse_team_scopes(team, orgs=orgs)
             with ui.progress("Searching repositories…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        rendered = render_rows(
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
             kind="github.repo",
             empty="No repositories found. Broaden your query or remove scope filters.",
         )
-        if rendered:
-            echo(rendered)
 
 
 @app.command(name="code")
@@ -180,15 +178,13 @@ def code_command(
             team_scopes = parse_team_scopes(team, orgs=orgs)
             with ui.progress("Searching code…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        rendered = render_rows(
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
             kind="github.code",
             empty="No code matches found. Check syntax, language, and repository scope.",
         )
-        if rendered:
-            echo(rendered)
 
 
 @app.command(name="issues")
@@ -242,7 +238,7 @@ def issues_command(
             team_scopes = parse_team_scopes(team, orgs=orgs)
             with ui.progress("Searching issues and pull requests…"):
                 rows = [r.model_dump() for r in use_case(filters, team_scopes=team_scopes)]
-        rendered = render_rows(
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
@@ -250,8 +246,6 @@ def issues_command(
             empty="No issues or pull requests found. Expand your query or check "
             "state/label filters.",
         )
-        if rendered:
-            echo(rendered)
 
 
 @app.command(name="users")
@@ -284,12 +278,10 @@ def users_command(
         )
         with open_client() as (client, ui), ui.progress("Searching users…"):
             rows = [r.model_dump() for r in SearchUsers(client)(filters)]
-        rendered = render_rows(
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
             kind="github.user",
             empty="No users or organizations found. Try different keywords or filters.",
         )
-        if rendered:
-            echo(rendered)
