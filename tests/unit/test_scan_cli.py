@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 from untaped.settings import get_settings, register_profile_settings
-from untaped.testing import CliInvoker
+from untaped.testing import CliInvoker, assert_destructive_contract
 
 from untaped_github.cli import app
 from untaped_github.settings import GithubSettings
@@ -113,7 +113,7 @@ def test_scan_sync_and_grep_pipe_without_search_api(
     assert grep.exit_code == 0, grep.output
     [line] = grep.stdout.splitlines()
     envelope = json.loads(line)
-    assert envelope["kind"] == "github.codehit"
+    assert envelope["kind"] == "github.code_hit"
     assert envelope["record"]["repo"] == "acme/api"
     assert envelope["record"]["path"] == "workflow.yml"
     assert all("/search/" not in str(call.request.url) for call in mock.calls)
@@ -176,7 +176,7 @@ def test_scan_list_clean_and_worktree(tmp_path: Path, monkeypatch: pytest.Monkey
 
     cleaned = CliInvoker().invoke(
         app,
-        ["scan", "clean", "--repo", "acme/api", "--format", "json"],
+        ["scan", "clean", "--repo", "acme/api", "-y", "--format", "json"],
     )
 
     assert json.loads(cleaned.stdout)[0]["status"] == "removed"
@@ -195,11 +195,45 @@ def test_scan_clean_requires_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_scan_clean_all_requires_yes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    source = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/repos").mock(
+            return_value=httpx.Response(200, json=[_repo("acme/api", source)])
+        )
+        sync = CliInvoker().invoke(app, ["scan", "sync", "--org", "acme", "--format", "json"])
 
     result = CliInvoker().invoke(app, ["scan", "clean", "--all", "--format", "json"])
 
+    assert sync.exit_code == 0, sync.output
     assert result.exit_code != 0
     assert "requires --yes" in result.output
+
+
+def test_scan_clean_repo_conforms_to_destructive_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    source = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
+
+    with respx.mock(base_url="https://api.github.com") as mock:
+        mock.get("/orgs/acme/repos").mock(
+            return_value=httpx.Response(200, json=[_repo("acme/api", source)])
+        )
+        sync = CliInvoker().invoke(app, ["scan", "sync", "--org", "acme", "--format", "json"])
+
+    assert sync.exit_code == 0, sync.output
+
+    def _corpus_still_has_repo() -> None:
+        listed = CliInvoker().invoke(app, ["scan", "list", "--format", "json"])
+        assert listed.exit_code == 0, listed.output
+        assert [row["repo"] for row in json.loads(listed.stdout)] == ["acme/api"]
+
+    assert_destructive_contract(
+        app,
+        ["scan", "clean", "--repo", "acme/api", "--format", "json"],
+        assert_unchanged=_corpus_still_has_repo,
+    )
 
 
 def test_scan_clean_rejects_repo_with_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

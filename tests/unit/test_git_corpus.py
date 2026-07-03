@@ -258,7 +258,7 @@ def test_list_clean_and_worktree_are_confined_to_managed_root(tmp_path: Path) ->
     assert listed.path.startswith(str(root))
     assert (Path(worktree.path) / "README.md").is_file()
 
-    [cleaned] = cache.clean_repos(root=root, repos=("acme/api",))
+    cleaned = cache.clean_repo(root=root, repo=listed)
 
     assert cleaned.status == "removed"
     assert not Path(worktree.path).exists()
@@ -273,7 +273,8 @@ def test_clean_removes_worktree_then_resync_can_materialize_again(tmp_path: Path
     cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
     first = cache.materialize_worktree(repo, root=root, ref=None)
 
-    cache.clean_repos(root=root, repos=("acme/api",))
+    [listed] = cache.list_repos(root=root)
+    cache.clean_repo(root=root, repo=listed)
     cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
     second = cache.materialize_worktree(repo, root=root, ref=None)
 

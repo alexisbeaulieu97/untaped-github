@@ -10,13 +10,13 @@ from untaped.api import (
     ConfigError,
     FormatOption,
     OutputFormat,
-    UntapedError,
     app_context,
+    batch_apply,
     clamp_parallel,
     create_app,
     echo,
     emit,
-    render_rows,
+    finish,
     report_errors,
 )
 
@@ -35,7 +35,7 @@ AllOption = Annotated[
 ]
 YesOption = Annotated[
     bool,
-    Parameter(name="--yes", negative="", help="Confirm destructive clean operations."),
+    Parameter(name=["--yes", "-y"], negative="", help="Confirm destructive clean operations."),
 ]
 PathOption = Annotated[
     list[str] | None,
@@ -155,7 +155,7 @@ def grep_command(
             failures=result.failures,
             fmt=fmt,
             columns=columns,
-            kind="github.codehit",
+            kind="github.code_hit",
             empty="No matches found.",
         )
 
@@ -198,15 +198,13 @@ def list_command(
     with report_errors():
         settings = app_context().section("github", GithubSettings)
         rows = [row.model_dump() for row in ListCorpus(GitCorpusCache())(root=settings.corpus_path)]
-        rendered = render_rows(
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
             kind="github.corpus_repo",
             empty="No repositories are cached in the local scan corpus.",
         )
-        if rendered:
-            echo(rendered)
 
 
 @app.command(name="clean")
@@ -228,25 +226,32 @@ def clean_command(
             raise ConfigError("scan clean requires --repo or --all")
         if repos and all_repos:
             raise ConfigError("scan clean cannot combine --repo with --all")
-        if all_repos and not yes:
-            raise ConfigError("scan clean --all requires --yes")
         settings = app_context().section("github", GithubSettings)
-        rows = [
-            row.model_dump()
-            for row in CleanCorpus(GitCorpusCache())(
-                root=settings.corpus_path,
-                repos=repos,
-            )
-        ]
-        rendered = render_rows(
+        corpus = GitCorpusCache()
+        cached = corpus.list_repos(root=settings.corpus_path)
+        selected = cached if all_repos else tuple(row for row in cached if row.repo in set(repos))
+        cleaner = CleanCorpus(corpus)
+        ui = app_context().ui(strict=False)
+        outcome = batch_apply(
+            selected,
+            lambda row: cleaner(root=settings.corpus_path, repo=row),
+            verb="delete",
+            noun="cached GitHub repo",
+            label=lambda row: row.repo,
+            describe=lambda row: {"repo": row.repo, "ref": row.ref, "path": row.path},
+            ui=ui,
+            destructive=True,
+            assume_yes=yes,
+        )
+        rows = [removed.model_dump() for _, removed in outcome.results]
+        emit(
             rows,
             fmt=fmt,
             columns=columns,
             kind="github.corpus_repo",
             empty="No matching repositories were cached.",
         )
-        if rendered:
-            echo(rendered)
+        finish(outcome)
 
 
 def _scope(
@@ -284,12 +289,10 @@ def _render_collection(
     kind: str,
     empty: str,
 ) -> None:
-    rendered = render_rows(rows, fmt=fmt, columns=columns, kind=kind, empty=empty)
-    if rendered:
-        echo(rendered)
+    emit(rows, fmt=fmt, columns=columns, kind=kind, empty=empty)
     if failures:
         for failure in failures:
             repo = getattr(failure, "repo", "<unknown>")
             reason = getattr(failure, "reason", str(failure))
             echo(f"failed {repo}: {reason}", err=True)
-        raise UntapedError(f"scan completed with {len(failures)} repo failure(s)")
+    finish(bool(failures))

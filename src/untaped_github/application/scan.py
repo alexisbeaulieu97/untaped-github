@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from untaped.api import UntapedError
+from untaped.api import UntapedError, bounded_map
 
-from untaped_github._concurrency import bounded_map
 from untaped_github.application.inventory import (
     RepositoryInventoryItem,
     RepositoryInventoryScope,
@@ -172,8 +171,8 @@ class CleanCorpus:
     def __init__(self, corpus: GitCorpus) -> None:
         self._corpus = corpus
 
-    def __call__(self, *, root: Path, repos: tuple[str, ...]) -> tuple[CorpusRepoResult, ...]:
-        return self._corpus.clean_repos(root=root, repos=repos)
+    def __call__(self, *, root: Path, repo: CorpusRepoResult) -> CorpusRepoResult:
+        return self._corpus.clean_repo(root=root, repo=repo)
 
 
 class WorktreeCorpus:

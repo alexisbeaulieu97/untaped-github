@@ -300,9 +300,10 @@ GitHub Search wrapper and must not call `/search/*`.
   live REST inventory; `--ref` only works for refs already cached locally. Bulk
   human workspaces belong to `untaped-workspace`.
 - `scan list` and `scan clean` inspect/prune the managed corpus. Clean
-  operations require `--repo` or `--all --yes`, remove managed worktrees before
-  deleting a bare repo, and must refuse paths outside the managed root. List
-  skips corrupt metadata entries with a warning instead of hiding healthy rows.
+  operations require `--repo` or `--all`; both paths prompt before deleting
+  unless `--yes`/`-y` is passed, remove managed worktrees before deleting a bare
+  repo, and must refuse paths outside the managed root. List skips corrupt
+  metadata entries with a warning instead of hiding healthy rows.
 
 The corpus fetch is shallow and blobful by default. Do not add
 `--filter=blob:none` to scan fetches: `git grep <ref>` needs blobs present
@@ -442,7 +443,7 @@ repos --format pipe | untaped-github search code --repo-stdin` composes. Only
 `github.repo` records carry `full_name`, so only a `search repos` pipe feeds
 `--repo-stdin`; piping `code`/`issue`/`user` output into it fails loud with a
 line-precise error. The search commands and `whoami`
-tag their output via `render_rows(..., kind="github.<repo|code|issue|user>")`.
+tag their output via `emit(..., kind="github.<repo|code|issue|user>")`.
 Keep this in the CLI
 layer: application use cases should receive already-parsed `repos` and
 `TeamScope` values, not own stdin.
@@ -453,15 +454,15 @@ layer: application use cases should receive already-parsed `repos` and
 until exhausted or `--limit` is hit. Search payloads nest rows under `items`;
 list payloads, such as team repos, return JSON arrays.
 
-`pagination.py` keeps only the GitHub knowledge — `Link`-header parsing and
-the payload shapes — as a fetch closure handed to the SDK's `paginate_pages`,
-which owns the loop, the limit, the cursor-cycle guard, and the
-100-page non-convergence cap (`UntapedError`).
+`pagination.py` keeps only the GitHub knowledge — search payloads unwrap
+`items`, list payloads are raw arrays, and GitHub uses `per_page` — as thin
+wrappers around the SDK's `paginate_link`, which owns Link parsing, limits,
+the cursor-cycle guard, and the 100-page non-convergence cap.
 
 Two efficiency/defense rules are load-bearing:
 
 - When `--limit < per_page`, the first request asks only for `limit` rows.
-- `paginate_pages` caps the walk at 100 pages and refuses to follow a
+- `paginate_link` caps the walk at 100 pages and refuses to follow a
   `next` link that matches any previously followed URL.
 
 ## Layering
@@ -477,7 +478,7 @@ Two efficiency/defense rules are load-bearing:
   `Protocol` ports. Scope defaulting, team-to-repo resolution, repo-list
   enumeration, dedupe, ordering, and corpus orchestration live here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
-  `pagination.py` (REST Link-header mechanics over the SDK's `paginate_pages`),
+  `pagination.py` (GitHub search/list wrappers over the SDK's `paginate_link`),
   `graphql.py` (batched ref-probe query building and response parsing), and
   `git_corpus.py` (local Git subprocess adapter). Adapters satisfy application
   ports structurally and do not import `application`.
@@ -511,7 +512,8 @@ coverage gate.
 5. Wire the Cyclopts command in `cli/commands.py`, `cli/search_commands.py`,
    or another focused sub-app module; keep stdout data-only and expose
    `--format`/`--columns` for data output.
-6. If the command emits rows, update `tests/unit/test_format_raw_first_key.py`.
+6. If the command emits rows, update the GitHub identifier/kind contracts in
+   `tests/unit/test_format_raw_first_key.py` and this file.
 7. Run `uv run untaped-github <command> --help` plus the full verification
    commands above.
 
