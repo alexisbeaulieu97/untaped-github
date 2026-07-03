@@ -1,8 +1,10 @@
 # AGENTS.md - `untaped-github`
 
-Single source of truth for this standalone CLI repo. If you change
-architecture, command behavior, settings behavior, or the development
-workflow, update this file in the same commit.
+GitHub-specific companion to the suite-wide SDK guide and fleet conventions:
+[`docs/plugins.md`](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/plugins.md)
+and
+[`docs/tool-conventions.md`](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/tool-conventions.md).
+This file keeps only `untaped-github` rules, contracts, and gotchas.
 
 ## Mission
 
@@ -10,10 +12,8 @@ workflow, update this file in the same commit.
 `untaped-github`. It provides authenticated user inspection, GitHub REST
 search (`repos`, `code`, `issues`, `users`), complete org/team repository
 inventory, and local Git-corpus scans for repeated team-wide code searches.
-The `untaped` SDK owns config
-loading, output helpers, HTTP/TLS primitives, profile selection, and shared
-errors. Profile selection is built into the SDK and works in any token
-position.
+The `untaped` SDK owns shared config, output, HTTP/TLS, profile, and error
+machinery.
 
 ## Hard Rules
 
@@ -21,56 +21,24 @@ position.
    changes, new command patterns, settings changes, and major GitHub
    workflow changes must be documented here and in
    `src/untaped_github/skills/untaped-github/SKILL.md`.
-2. **Prefer `uv` commands over manual dependency edits.** Use `uv add` and
-   `uv add --group dev`; hand-edit tool config only.
-3. **Expose the CLI through the SDK's `run_tool` entry point.**
-   The `untaped-github` console script is `untaped_github.__main__:main`,
-   which hands the Cyclopts `app` and a `ToolSpec` to the SDK's `run_tool`
-   (see § Tool entry point below). `untaped_github/__init__.py` re-exports
-   the `app` (and the public client API) for sibling tools. Keep the root
-   API import-light: `__init__.py` re-exports `app` only through a PEP 562
-   module `__getattr__` so importing the package never eagerly imports the
-   command tree.
-4. **Use the 4-layer DDD layout.** `cli -> application -> domain`, with
-   `infrastructure -> domain`; `application` and `infrastructure` must not
-   import each other at runtime.
-5. **Declare ports in `application/ports.py`.** Use cases depend on the
-   narrowest `Protocol`; concrete adapters satisfy ports structurally.
-6. **Use absolute imports, and import the SDK from `untaped.api`.**
-   `from untaped_github...` and `from untaped.api import ...`, never
-   relative imports. `untaped.api` is the supported SDK surface;
-   only tests may reach for `untaped.testing` (and SDK internals such as
-   `untaped.main`/`untaped.settings` when a name is not exported by
-   `untaped.api`).
-7. **Every source module has a module docstring.** Re-export `__init__.py`
-   files are exempt.
-8. **Cyclopts command signatures are explicit.** Use
-   `Annotated[..., Parameter(...)]` and name documented commands/options
-   explicitly. Required inputs are required positional-only params
-   (`Parameter(help=...)` before `/`); a missing value renders
-   `error: ... requires an argument` (exit 2) automatically — never an
-   optional default plus a manual help dance.
-9. **stdout is data only.** Prompts, progress, and status messages go to
-   stderr via `echo(..., err=True)`.
-10. **Pipe-friendly commands keep stable raw first-key identifiers.** These
-    raw first-key contracts are load-bearing: `GithubUser` starts with
-    `login`; repo search and repo-list rows start with `full_name`; issue
-    search rows start with `repo`; user search rows start with `id`; code
-    search rows start with `name`.
-11. **Human table output honors profile UI settings.** GitHub row commands
-    render `--format table` through the active settings-backed
-    `ui_context().collection(...)` so per-profile themes and
-    `ui.collection_view` apply.
-12. **Structured output bypasses configured themes.** `--format json`, `yaml`,
-    and `raw` render through a plain `UiContext().collection(...)` so
-    invalid or missing themes never break pipe-friendly output.
-13. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
-    `.get_secret_value()` only inside the HTTP adapter.
-14. **Build GitHub HTTP clients with `connected_client(...)`.** The SDK owns
-    required-field validation, bearer auth, base-URL normalization, and TLS
-    resolution (`resolve_verify`); never hard-code TLS verification policy.
-15. **Finish with verification.** Run `uv run ruff check --fix`,
-    `uv run ruff format`, `uv run mypy`, and `uv run pytest`.
+2. **Keep the GitHub `ToolSpec` particulars stable.** The console script is
+   `untaped_github.__main__:main`; `ToolSpec` declares
+   `command="untaped-github"`, `section="github"`,
+   `profile_model=GithubSettings`, and one packaged skill named
+   `untaped-github`. The root package re-exports `app` lazily via PEP 562
+   `__getattr__` so importing `untaped_github` does not import the command tree.
+3. **Keep GitHub row identifiers and pipe kinds stable.** `GithubUser` starts
+   with `login`; repo search and repo-list rows start with `full_name` and emit
+   `github.repo`; issue search rows start with `repo` and emit `github.issue`;
+   user search rows start with `id` and emit `github.user`; code search rows
+   start with `name` and emit `github.code`; scan grep rows start with `repo`
+   and emit `github.code_hit`; corpus/worktree rows start with `repo` and emit
+   `github.corpus_repo` / `github.worktree`.
+4. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
+   `.get_secret_value()` only inside the HTTP adapter.
+5. **Build GitHub HTTP clients with `connected_client(...)`.** GitHub clients
+   must use the `github` section, bearer-token auth, the configured base URL,
+   and the SDK-resolved TLS policy; never hard-code TLS verification policy.
 
 ## Release Workflow
 
@@ -116,19 +84,6 @@ GitHub workflow changes. Command code reads typed settings with
 `app_context().section("github", GithubSettings)`, not a global
 aggregate `settings.github` attribute.
 
-## Tool entry point
-
-`untaped-github` is a standalone CLI. `__main__.main()` hands the Cyclopts
-`app` (from `untaped_github.cli`) and a `ToolSpec` to the SDK's `run_tool`.
-The `ToolSpec` declares `command="untaped-github"`, `section="github"`,
-`profile_model=GithubSettings`, and one `SkillAsset` for the packaged agent
-skill. `run_tool` mounts the shared `config` / `profile` / `skills` command
-groups, wires the `--profile` / `--verbose` / `--quiet` root options, and
-runs under the SDK's error contract. The console script is declared in
-`pyproject.toml` under `[project.scripts]` as
-`untaped-github = "untaped_github.__main__:main"`; there is no
-`untaped.plugins` entry point.
-
 ## Auth Model
 
 GitHub uses bearer-token auth. The token is a `SecretStr` read through
@@ -137,12 +92,8 @@ GitHub uses bearer-token auth. The token is a `SecretStr` read through
 the narrowed `GithubSettings` into `GithubClient`. Adapters never read the
 full SDK settings aggregate directly.
 
-Profile selection is owned by the SDK: the `--profile` option works in any
-token position, so commands define no command-local `--profile` parameter.
-Commands call bare `open_client()`, which calls `app_context()`; the SDK
-resolves settings exactly once under the active profile and returns a frozen
-context (`ctx.section(...)` for the `github` section, `ctx.http` for SDK
-HTTP settings) without leaking into ambient process state.
+Commands call bare `open_client()`, which pulls the `github` section and SDK
+HTTP settings from `app_context()`.
 
 `GithubClient.__init__` fail-fasts with `ConfigError` (via the SDK's
 `connected_client` required-field validation) if the token is missing or
@@ -434,19 +385,14 @@ locally merge-sorted before the final `--limit` slice; ties sort by
 repository-search batching behavior for those endpoints without endpoint-
 specific tests for ordering, limits, and GitHub validation behavior.
 
-`--repo-stdin` reads repo scopes with the SDK's
-`read_identifiers([], stdin=True, id_field="full_name")` and appends them to
-explicit `--repo` values before the filter object is constructed. It accepts
-either bare newline-separated `owner/name` lines **or** an untaped `--format
-pipe` stream (each record's `full_name` is extracted), so `untaped-github search
-repos --format pipe | untaped-github search code --repo-stdin` composes. Only
-`github.repo` records carry `full_name`, so only a `search repos` pipe feeds
-`--repo-stdin`; piping `code`/`issue`/`user` output into it fails loud with a
-line-precise error. The search commands and `whoami`
-tag their output via `emit(..., kind="github.<repo|code|issue|user>")`.
-Keep this in the CLI
-layer: application use cases should receive already-parsed `repos` and
-`TeamScope` values, not own stdin.
+`--repo-stdin` accepts bare newline-separated `owner/name` lines or
+`github.repo` pipe records, extracting `full_name` before the filter object is
+constructed. That makes
+`untaped-github search repos --format pipe | untaped-github search code --repo-stdin`
+compose. Piping `github.code`/`github.issue`/`github.user` output into
+`--repo-stdin` fails loud with a line-precise error. Keep this in the CLI layer:
+application use cases should receive already-parsed `repos` and `TeamScope`
+values, not own stdin.
 
 ### Pagination
 
@@ -474,48 +420,29 @@ Two efficiency/defense rules are load-bearing:
   Query/filter helpers do no I/O.
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
   `SearchUsers`, `ListRepos`, `SyncCorpus`, `GrepCorpus`, `ListCorpus`,
-  `CleanCorpus`, `WorktreeCorpus`, shared scope value objects, and their
-  `Protocol` ports. Scope defaulting, team-to-repo resolution, repo-list
-  enumeration, dedupe, ordering, and corpus orchestration live here.
+  `CleanCorpus`, `WorktreeCorpus`, and shared scope value objects. Scope
+  defaulting, team-to-repo resolution, repo-list enumeration, dedupe, ordering,
+  and corpus orchestration live here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
   `pagination.py` (GitHub search/list wrappers over the SDK's `paginate_link`),
   `graphql.py` (batched ref-probe query building and response parsing), and
-  `git_corpus.py` (local Git subprocess adapter). Adapters satisfy application
-  ports structurally and do not import `application`.
+  `git_corpus.py` (local Git subprocess adapter).
 - `cli/`: composition root. `cli/_client.open_client` reads this tool's config
   and returns a context-managed `GithubClient`; top-level commands use it.
 
-## Development Workflow
-
-```bash
-uv sync
-uv run pre-commit install
-uv run pytest
-uv run mypy
-uv run ruff check --fix
-uv run ruff format
-uv run untaped-github --help
-```
-
-Use `pytest --no-cov` for tight local loops. Full `pytest` enforces the
-coverage gate.
-
 ## Recipe: Add A GitHub Subcommand
 
-1. Write a use-case test with a stub satisfying the narrowest port.
-2. Add or narrow a port in `application/ports.py` if the command needs new
-   service behavior.
-3. Add a domain model or query value object in `domain/` when needed.
-4. Add the HTTP method to `infrastructure/github_client.py` and keep
+1. Write a use-case test with a GitHub service stub.
+2. Add a domain model or query value object in `domain/` when needed.
+3. Add the HTTP method to `infrastructure/github_client.py` and keep
    pagination details in `infrastructure/pagination.py` (REST) or query
    building/response parsing in `infrastructure/graphql.py` (GraphQL).
-5. Wire the Cyclopts command in `cli/commands.py`, `cli/search_commands.py`,
-   or another focused sub-app module; keep stdout data-only and expose
-   `--format`/`--columns` for data output.
-6. If the command emits rows, update the GitHub identifier/kind contracts in
-   `tests/unit/test_format_raw_first_key.py` and this file.
-7. Run `uv run untaped-github <command> --help` plus the full verification
-   commands above.
+4. Wire the command in `cli/commands.py`, `cli/search_commands.py`, or another
+   focused sub-app module.
+5. If the command emits rows, update the GitHub identifier/kind contracts in
+   tests and this file.
+6. Run `uv run untaped-github <command> --help` plus the fleet verification
+   loop from `docs/tool-conventions.md`.
 
 ## See Also
 
