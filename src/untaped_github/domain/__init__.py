@@ -20,6 +20,15 @@ from untaped_github.domain.queries import (
     RepoSearchFilters,
     UserSearchFilters,
 )
+from untaped_github.domain.sweep import (
+    RefEvaluation,
+    RefProfile,
+    RefSelector,
+    RepoSweepOutcome,
+    SweepQuery,
+    profile_join,
+    ref_matches,
+)
 
 __all__ = [
     "BatchRepoRefsFailure",
@@ -33,12 +42,19 @@ __all__ = [
     "GithubUser",
     "IssueResult",
     "IssueSearchFilters",
+    "RefEvaluation",
+    "RefProfile",
+    "RefSelector",
     "RepoListResult",
     "RepoRef",
     "RepoRefs",
     "RepoResult",
     "RepoSearchFilters",
+    "RepoSweepOutcome",
+    "SweepQuery",
     "UserResult",
     "UserSearchFilters",
     "WorktreeResult",
+    "profile_join",
+    "ref_matches",
 ]
