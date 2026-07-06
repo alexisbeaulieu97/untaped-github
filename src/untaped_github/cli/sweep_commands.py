@@ -46,7 +46,7 @@ DepthOption = Annotated[
 ]
 ParallelOption = Annotated[
     int | None,
-    Parameter(name=["--parallel", "-j"], help="Parallel Git workers."),
+    Parameter(name=["--parallel", "-j"], help="Parallel Git workers (capped at 32)."),
 ]
 
 

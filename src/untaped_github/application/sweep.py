@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -453,15 +453,3 @@ def _dedupe_matches(matches: Iterable[_ContentMatch]) -> tuple[SweepMatch, ...]:
         for (full_name, _blob_oid, path, line, text), refs in grouped.items()
     ]
     return tuple(sorted(rows, key=lambda row: (row.full_name, row.path, row.line, row.text)))
-
-
-def outcome_dict(outcome: RepoSweepOutcome) -> Mapping[str, object]:
-    """Return the public row shape used by the CLI renderer."""
-    return {
-        "full_name": outcome.full_name,
-        "clone_url": outcome.clone_url,
-        "refs_matched": list(outcome.refs_matched),
-        "hits": dict(outcome.hits),
-        "owners": list(outcome.owners),
-        "synced_at": outcome.synced_at,
-    }

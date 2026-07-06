@@ -287,8 +287,10 @@ fetch and evaluate locally with `git`.
   `cache status` emits `github.corpus_repo` rows with profile, freshness, and
   disk size. `cache clean` requires exactly one of `--repo`, `--all`, or
   `--prune`; all destructive paths use `batch_apply` and prompt unless
-  `--yes`/`-y` is passed. `--prune` resolves live inventory for `--org`/`--team`
-  scopes and removes cached repos that departed or are now archived.
+  `--yes`/`-y` is passed. `--prune` resolves live inventory for `--org` scopes
+  and removes cached repos that departed or are now archived. It rejects
+  `--team` because team membership is not recorded in corpus metadata, so
+  "departed from this team" is not locally decidable.
   `cache worktree` materializes one cached repo/ref and emits `github.worktree`.
 
 ## Repository Inventory
@@ -448,10 +450,10 @@ Two efficiency/defense rules are load-bearing:
   `corpus.py`, and pure repo inventory pattern helpers in `repo_filters.py`.
   Query/filter helpers do no I/O.
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
-  `SearchUsers`, `ListRepos`, `SyncCorpus`, `GrepCorpus`, `ListCorpus`,
-  `CleanCorpus`, `WorktreeCorpus`, and shared scope value objects. Scope
-  defaulting, team-to-repo resolution, repo-list enumeration, dedupe, ordering,
-  and corpus orchestration live here.
+  `SearchUsers`, `ListRepos`, `Sweep`, `StatusCorpus`, `CleanCorpus`,
+  `WorktreeCorpus`, and shared scope value objects. Scope defaulting,
+  team-to-repo resolution, repo-list enumeration, dedupe, ordering, sweep
+  orchestration, and corpus lifecycle orchestration live here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
   `pagination.py` (GitHub search/list wrappers over the SDK's `paginate_link`),
   `graphql.py` (batched ref-probe query building and response parsing), and

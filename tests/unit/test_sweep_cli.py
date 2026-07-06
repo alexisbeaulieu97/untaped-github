@@ -255,6 +255,28 @@ def test_path_without_content_suggests_has_file(
     assert "use --has-file" in result.output
 
 
+def test_sweep_parallel_help_documents_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(app, ["sweep", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--parallel" in result.output
+    assert "32" in result.output
+
+
+def test_parallel_must_be_positive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+
+    result = CliInvoker().invoke(
+        app,
+        ["sweep", "--repo", "acme/api", "--has-file", "README.md", "--parallel", "0"],
+    )
+
+    assert result.exit_code != 0
+    assert "--parallel must be positive" in result.output
+
+
 def test_exit_code_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
     source = _source_repo(tmp_path, "api", {"README.md": "nothing here\n"})

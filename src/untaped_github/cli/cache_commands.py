@@ -20,7 +20,7 @@ from untaped.api import (
 
 from untaped_github.application import RepositoryInventoryItem, RepositoryInventoryScope
 from untaped_github.cli._client import open_client
-from untaped_github.cli._scopes import OrgOption, TeamOption, parse_team_scopes
+from untaped_github.cli._scopes import OrgOption, TeamOption
 from untaped_github.domain import CorpusRepoResult
 from untaped_github.settings import GithubSettings
 
@@ -174,10 +174,13 @@ def _require_one_clean_mode(
 
 def _prune_scope(*, org: list[str] | None, team: list[str] | None) -> RepositoryInventoryScope:
     orgs = tuple(org or ())
-    teams = parse_team_scopes(team, orgs=orgs)
-    if not orgs and not teams:
-        raise ConfigError("cache clean --prune requires --org or --team")
-    return RepositoryInventoryScope(orgs=orgs, teams=teams)
+    if team:
+        raise ConfigError(
+            "--prune cannot resolve team membership from the corpus; prune with --org or --repo"
+        )
+    if not orgs:
+        raise ConfigError("cache clean --prune requires --org")
+    return RepositoryInventoryScope(orgs=orgs)
 
 
 def _prune_selection(
@@ -187,7 +190,7 @@ def _prune_selection(
     team: list[str] | None,
 ) -> tuple[CorpusRepoResult, ...]:
     scope = _prune_scope(org=org, team=team)
-    orgs = set(scope.orgs) | {team_scope.org for team_scope in scope.teams}
+    orgs = set(scope.orgs)
     return tuple(row for row in cached if any(row.repo.startswith(f"{org}/") for org in orgs))
 
 

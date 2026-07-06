@@ -241,9 +241,10 @@ oldest/newest fetched timestamps.
 
 `cache clean` requires exactly one of `--repo`, `--all`, or `--prune`.
 Delete operations prompt unless `--yes`/`-y` is passed and remove managed
-worktrees before deleting a bare repo. `--prune` accepts `--org`/`--team`,
-resolves live inventory, and removes cached repos in scope that departed or
-are now archived.
+worktrees before deleting a bare repo. `--prune` accepts `--org`, resolves
+live inventory, and removes cached repos in that org that departed or are now
+archived. `--prune` rejects `--team` because team membership is not recorded
+in corpus metadata; use `--org` pruning or an explicit `--repo` clean instead.
 
 `cache worktree REPO` materializes one cached repo/ref into a managed worktree
 and prints its path. Worktree resolution is local-corpus backed and does not

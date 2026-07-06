@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 from untaped.settings import get_settings, register_profile_settings
-from untaped.testing import CliInvoker
+from untaped.testing import CliInvoker, assert_destructive_contract
 
 from untaped_github.cli import app
 from untaped_github.settings import GithubSettings
@@ -144,6 +144,22 @@ def test_cache_prune_removes_departed_repos(
     assert [row["repo"] for row in json.loads(listed_after_prune.stdout)] == ["acme/api"]
 
 
+def test_cache_prune_rejects_team_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    source = _source_repo(tmp_path, "api", {"README.md": "hello\n"})
+    _populate_cache(tmp_path, [_repo("acme/api", source)])
+
+    result = CliInvoker().invoke(
+        app,
+        ["cache", "clean", "--prune", "--team", "acme/backend", "--yes", "--format", "json"],
+    )
+    listed = CliInvoker().invoke(app, ["cache", "status", "--format", "json"])
+
+    assert result.exit_code != 0
+    assert "--prune cannot resolve team membership from the corpus" in result.output
+    assert [row["repo"] for row in json.loads(listed.stdout)] == ["acme/api"]
+
+
 def test_cache_clean_requires_exactly_one_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -159,6 +175,54 @@ def test_cache_clean_requires_exactly_one_mode(
     assert "requires exactly one" in missing.output
     assert combined.exit_code != 0
     assert "requires exactly one" in combined.output
+
+
+def test_cache_clean_all_requires_yes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    source = _source_repo(tmp_path, "api", {"README.md": "hello\n"})
+    _populate_cache(tmp_path, [_repo("acme/api", source)])
+
+    result = CliInvoker().invoke(app, ["cache", "clean", "--all", "--format", "json"])
+    listed = CliInvoker().invoke(app, ["cache", "status", "--format", "json"])
+
+    assert result.exit_code != 0
+    assert "requires --yes" in result.output
+    assert [row["repo"] for row in json.loads(listed.stdout)] == ["acme/api"]
+
+
+def test_cache_clean_repo_conforms_to_destructive_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    source = _source_repo(tmp_path, "api", {"README.md": "hello\n"})
+    _populate_cache(tmp_path, [_repo("acme/api", source)])
+
+    def _corpus_still_has_repo() -> None:
+        listed = CliInvoker().invoke(app, ["cache", "status", "--format", "json"])
+        assert listed.exit_code == 0, listed.output
+        assert [row["repo"] for row in json.loads(listed.stdout)] == ["acme/api"]
+
+    assert_destructive_contract(
+        app,
+        ["cache", "clean", "--repo", "acme/api", "--format", "json"],
+        assert_unchanged=_corpus_still_has_repo,
+    )
+
+
+def test_cache_clean_all_yes_removes_every_cached_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    api = _source_repo(tmp_path, "api", {"README.md": "hello\n"})
+    worker = _source_repo(tmp_path, "worker", {"README.md": "hello\n"})
+    _populate_cache(tmp_path, [_repo("acme/api", api), _repo("acme/worker", worker)])
+
+    cleaned = CliInvoker().invoke(app, ["cache", "clean", "--all", "--yes", "--format", "json"])
+    listed = CliInvoker().invoke(app, ["cache", "status", "--format", "json"])
+
+    assert cleaned.exit_code == 0, cleaned.output
+    assert {row["repo"] for row in json.loads(cleaned.stdout)} == {"acme/api", "acme/worker"}
+    assert listed.stdout == "[]\n"
 
 
 def test_cache_worktree_materializes_cached_ref(
