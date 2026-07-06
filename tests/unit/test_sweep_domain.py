@@ -31,6 +31,33 @@ def test_labels_are_flag_value_pairs_in_stable_order() -> None:
     )
 
 
+def test_content_modifiers_default_false() -> None:
+    query = SweepQuery(greps=("old_api",))
+
+    assert query.ignore_case is False
+    assert query.fixed_strings is False
+    assert query.word_regexp is False
+
+
+def test_content_modifiers_do_not_perturb_labels() -> None:
+    query = SweepQuery(
+        greps=("old_api",),
+        not_greps=("new_api",),
+        has_files=("pyproject.toml",),
+        lacks_files=("setup.py",),
+        ignore_case=True,
+        fixed_strings=True,
+        word_regexp=True,
+    )
+
+    assert query.labels() == (
+        "grep:old_api",
+        "not-grep:new_api",
+        "has-file:pyproject.toml",
+        "lacks-file:setup.py",
+    )
+
+
 def test_all_positive_predicates_must_hit() -> None:
     query = SweepQuery(
         greps=("old_api",),

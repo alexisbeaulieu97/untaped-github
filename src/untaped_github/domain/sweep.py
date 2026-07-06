@@ -30,6 +30,9 @@ class SweepQuery:
     has_files: tuple[str, ...] = ()
     lacks_files: tuple[str, ...] = ()
     any_mode: bool = False
+    ignore_case: bool = False
+    fixed_strings: bool = False
+    word_regexp: bool = False
     refs: RefSelector = field(default_factory=RefSelector)
 
     def labels(self) -> tuple[str, ...]:
