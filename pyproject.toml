@@ -1,6 +1,6 @@
 [project]
 name = "untaped-github"
-version = "0.13.0"
+version = "0.14.0"
 description = "GitHub user and search CLI built on the untaped SDK."
 readme = "README.md"
 license = "MIT"
