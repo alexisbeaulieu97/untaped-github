@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from untaped_github.domain import CorpusFreshness, CorpusRepoTarget, GrepHit, RefSelector, covers
+from untaped_github.domain import (
+    CorpusFreshness,
+    CorpusRepoResult,
+    CorpusRepoTarget,
+    GrepHit,
+    RefSelector,
+    covers,
+)
 from untaped_github.domain.errors import GitCorpusError
 from untaped_github.infrastructure.git_corpus import (
     GitCorpusCache,
@@ -63,6 +70,29 @@ def _item(full_name: str, source: Path) -> CorpusRepoTarget:
         full_name=full_name,
         clone_url=source.as_uri(),
         default_branch="main",
+    )
+
+
+def _sync_default(cache: GitCorpusCache, repo: CorpusRepoTarget, *, root: Path) -> CorpusRepoResult:
+    return cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+
+
+def _grep_main(
+    cache: GitCorpusCache,
+    repo: CorpusRepoTarget,
+    *,
+    root: Path,
+    pattern: str,
+) -> tuple[GrepHit, ...]:
+    return cache.grep_ref(
+        repo,
+        root=root,
+        ref="main",
+        pattern=pattern,
+        paths=(),
+        ignore_case=False,
+        fixed_strings=False,
+        word_regexp=False,
     )
 
 
@@ -379,47 +409,18 @@ def test_sync_fetches_blobful_default_branch_and_grep_parses_hits(tmp_path: Path
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
 
-    synced = cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
-    hits = cache.grep_default_branch(
-        repo,
-        root=root,
-        pattern="acme/action",
-        paths=(),
-        globs=(),
-        ignore_case=False,
-        fixed_strings=False,
-        word_regexp=False,
-    )
+    synced = _sync_default(cache, repo, root=root)
+    hits = _grep_main(cache, repo, root=root, pattern="acme/action")
 
     assert synced.repo == "acme/api"
     assert synced.ref == "main"
     assert synced.status == "synced"
-    assert [hit.model_dump() for hit in hits] == [
-        {
-            "repo": "acme/api",
-            "ref": "main",
-            "path": "actions.yml",
-            "line": 2,
-            "column": 7,
-            "text": "uses: acme/action@v1",
-        },
-        {
-            "repo": "acme/api",
-            "ref": "main",
-            "path": "actions.yml",
-            "line": 3,
-            "column": 14,
-            "text": "second uses: acme/action@v2",
-        },
-        {
-            "repo": "acme/api",
-            "ref": "main",
-            "path": "nested/workflow.yml",
-            "line": 1,
-            "column": 7,
-            "text": "uses: acme/action@v3",
-        },
+    assert [(hit.path, hit.line, hit.text) for hit in hits] == [
+        ("actions.yml", 2, "uses: acme/action@v1"),
+        ("actions.yml", 3, "second uses: acme/action@v2"),
+        ("nested/workflow.yml", 1, "uses: acme/action@v3"),
     ]
+    assert all(hit.blob_oid for hit in hits)
 
 
 def test_grep_skips_binary_files_and_keeps_text_hits(tmp_path: Path) -> None:
@@ -434,18 +435,9 @@ def test_grep_skips_binary_files_and_keeps_text_hits(tmp_path: Path) -> None:
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
 
-    hits = cache.grep_default_branch(
-        repo,
-        root=root,
-        pattern="acme/action",
-        paths=(),
-        globs=(),
-        ignore_case=False,
-        fixed_strings=False,
-        word_regexp=False,
-    )
+    hits = _grep_main(cache, repo, root=root, pattern="acme/action")
 
     assert [hit.path for hit in hits] == ["README.md"]
 
@@ -455,18 +447,9 @@ def test_grep_exit_one_is_successful_no_match(tmp_path: Path) -> None:
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
 
-    hits = cache.grep_default_branch(
-        repo,
-        root=root,
-        pattern="acme/action",
-        paths=(),
-        globs=(),
-        ignore_case=False,
-        fixed_strings=False,
-        word_regexp=False,
-    )
+    hits = _grep_main(cache, repo, root=root, pattern="acme/action")
 
     assert hits == ()
 
@@ -476,15 +459,15 @@ def test_grep_exit_above_one_is_failure(tmp_path: Path) -> None:
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
 
     with pytest.raises(GitCorpusError, match=r"regular expression|brackets"):
-        cache.grep_default_branch(
+        cache.grep_ref(
             repo,
             root=root,
+            ref="main",
             pattern="[",
             paths=(),
-            globs=(),
             ignore_case=False,
             fixed_strings=False,
             word_regexp=False,
@@ -496,21 +479,12 @@ def test_grep_handles_colons_in_paths(tmp_path: Path) -> None:
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
 
-    [hit] = cache.grep_default_branch(
-        repo,
-        root=root,
-        pattern="acme/action",
-        paths=(),
-        globs=(),
-        ignore_case=False,
-        fixed_strings=False,
-        word_regexp=False,
-    )
+    [hit] = _grep_main(cache, repo, root=root, pattern="acme/action")
 
     assert hit.path == "a:b.txt"
-    assert hit.column == 7
+    assert hit.line == 1
 
 
 def test_grep_malformed_output_is_git_corpus_error(
@@ -540,18 +514,19 @@ def test_grep_malformed_output_is_git_corpus_error(
         check: bool = True,
         timeout: float | None = None,
         auth_header: str | None = None,
+        auth_url: str | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess(_args, 0, stdout=b"Binary file main:asset.bin matches\n")
 
     monkeypatch.setattr(cache, "_run", fake_run)
 
     with pytest.raises(GitCorpusError, match="could not parse git grep output"):
-        cache.grep_default_branch(
+        cache.grep_ref(
             repo,
             root=root,
+            ref="main",
             pattern="acme/action",
             paths=(),
-            globs=(),
             ignore_case=False,
             fixed_strings=False,
             word_regexp=False,
@@ -563,7 +538,7 @@ def test_list_clean_and_worktree_are_confined_to_managed_root(tmp_path: Path) ->
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
 
     [listed] = cache.list_repos(root=root)
     worktree = cache.materialize_worktree(repo, root=root, ref=None)
@@ -584,12 +559,12 @@ def test_clean_removes_worktree_then_resync_can_materialize_again(tmp_path: Path
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
     first = cache.materialize_worktree(repo, root=root, ref=None)
 
     [listed] = cache.list_repos(root=root)
     cache.clean_repo(root=root, repo=listed)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
     second = cache.materialize_worktree(repo, root=root, ref=None)
 
     assert first.path == second.path
@@ -601,7 +576,7 @@ def test_worktree_rejects_non_cached_ref(tmp_path: Path) -> None:
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
     repo = _item("acme/api", source)
-    cache.sync_default_branch(repo, root=root, depth=1, auth_header=None)
+    _sync_default(cache, repo, root=root)
 
     with pytest.raises(GitCorpusError, match="ref is not cached"):
         cache.materialize_worktree(repo, root=root, ref="v1.0")
@@ -624,7 +599,7 @@ def test_list_skips_corrupt_metadata_with_warning(
     source = _source_repo(tmp_path, "source", {"README.md": "uses: acme/action@v1\n"})
     cache = GitCorpusCache()
     root = tmp_path / "corpus"
-    cache.sync_default_branch(_item("acme/api", source), root=root, depth=1, auth_header=None)
+    _sync_default(cache, _item("acme/api", source), root=root)
     corrupt = root / "github.com" / "broken.git" / "untaped-corpus.json"
     corrupt.parent.mkdir(parents=True)
     corrupt.write_text("{")

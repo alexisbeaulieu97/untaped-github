@@ -101,6 +101,7 @@ class CorpusRepoResult(BaseModel):
     profile: str = "default"
     ref_globs: tuple[str, ...] = ()
     archived: bool = False
+    disk_bytes: int = 0
 
 
 class CodeHitResult(BaseModel):

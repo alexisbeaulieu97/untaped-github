@@ -1,4 +1,4 @@
-"""Local bare Git corpus adapter for scan commands."""
+"""Local bare Git corpus adapter for sweep and cache commands."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from typing import cast
 from urllib.parse import urlparse
 
 from untaped_github.domain import (
-    CodeHitResult,
     CorpusFreshness,
     CorpusRepoResult,
     CorpusRepoTarget,
@@ -48,53 +47,6 @@ class GitCorpusCache:
         self._git_path = shutil.which(git)
         self._timeout = timeout
         self._slow_timeout = slow_timeout
-
-    def sync_default_branch(
-        self,
-        repo: CorpusRepoTarget,
-        *,
-        root: Path,
-        depth: int,
-        auth_header: str | None,
-    ) -> CorpusRepoResult:
-        """Fetch a repository's default branch into the managed bare corpus."""
-        branch = _default_branch(repo)
-        url = _remote_url(repo)
-        scoped_auth_header = _auth_header_for_url(url, auth_header)
-        bare = cache_path_for(url, cache_dir=root)
-        if not (bare / "HEAD").is_file():
-            bare.parent.mkdir(parents=True, exist_ok=True)
-            self._run(["init", "--bare", str(bare)], timeout=self._slow_timeout)
-        self._ensure_origin(bare, url, auth_header=scoped_auth_header)
-        args = ["fetch", "--prune", "--no-tags", "origin"]
-        if depth > 0:
-            args.append(f"--depth={depth}")
-        args.append(f"+refs/heads/{branch}:refs/heads/{branch}")
-        self._run(
-            args,
-            cwd=bare,
-            timeout=self._slow_timeout,
-            auth_header=scoped_auth_header,
-            auth_url=url,
-        )
-        fetched_at = datetime.now(UTC).isoformat()
-        _write_metadata(
-            bare,
-            {
-                "repo": repo.full_name,
-                "ref": branch,
-                "clone_url": url,
-                "fetched_at": fetched_at,
-            },
-        )
-        return CorpusRepoResult(
-            repo=repo.full_name,
-            ref=branch,
-            path=str(bare),
-            clone_url=url,
-            status="synced",
-            fetched_at=fetched_at,
-        )
 
     def sync_repo(
         self,
@@ -183,58 +135,6 @@ class GitCorpusCache:
             profile=_metadata_profile(data),
             ref_globs=_metadata_ref_globs(data),
             archived=_metadata_archived(data),
-        )
-
-    def has_default_branch(self, repo: CorpusRepoTarget, *, root: Path) -> bool:
-        branch = _default_branch(repo)
-        bare = cache_path_for(_remote_url(repo), cache_dir=root)
-        if not (bare / "HEAD").is_file():
-            return False
-        result = self._run(
-            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-            cwd=bare,
-            check=False,
-        )
-        return result.returncode == 0
-
-    def grep_default_branch(
-        self,
-        repo: CorpusRepoTarget,
-        *,
-        root: Path,
-        pattern: str,
-        paths: tuple[str, ...],
-        globs: tuple[str, ...],
-        ignore_case: bool,
-        fixed_strings: bool,
-        word_regexp: bool,
-    ) -> tuple[CodeHitResult, ...]:
-        """Run ``git grep`` against one cached default branch."""
-        branch = _default_branch(repo)
-        bare = cache_path_for(_remote_url(repo), cache_dir=root)
-        args = ["grep", "-n", "--column", "-z", "-I"]
-        if ignore_case:
-            args.append("--ignore-case")
-        if fixed_strings:
-            args.append("--fixed-strings")
-        if word_regexp:
-            args.append("--word-regexp")
-        args.extend(["-e", pattern, branch, "--"])
-        args.extend(paths)
-        args.extend(f":(glob){glob}" for glob in globs)
-        result = cast(
-            subprocess.CompletedProcess[bytes],
-            self._run(args, cwd=bare, capture_bytes=True, check=False),
-        )
-        if result.returncode == 1:
-            return ()
-        if result.returncode != 0:
-            stderr = (result.stderr or b"").decode(errors="replace").strip()
-            raise GitCorpusError(stderr or f"git grep failed with status {result.returncode}")
-        return _parse_grep_output(
-            result.stdout or b"",
-            repo=repo.full_name,
-            ref=branch,
         )
 
     def local_refs(
@@ -432,9 +332,7 @@ class GitCorpusCache:
         if not (bare / "HEAD").is_file():
             raise GitCorpusError("repository is not in the local corpus")
         if not self._ref_exists(bare, selected_ref):
-            raise GitCorpusError(
-                f"ref is not cached: {selected_ref}; run `untaped-github scan sync`"
-            )
+            raise GitCorpusError(f"ref is not cached: {selected_ref}; run a sweep that fetches it")
         worktree = _worktree_path(repo.full_name, selected_ref, root=root)
         if worktree.exists() and not (worktree / ".git").exists():
             raise GitCorpusError(f"worktree path exists and is not a git worktree: {worktree}")
@@ -766,38 +664,6 @@ def _parse_ref_grep_output(payload: bytes, *, ref: str) -> tuple[tuple[str, int,
                 ref_path.removeprefix(prefix),
                 line,
                 raw_text.decode(errors="replace").rstrip("\n"),
-            )
-        )
-    return tuple(rows)
-
-
-def _parse_grep_output(payload: bytes, *, repo: str, ref: str) -> tuple[CodeHitResult, ...]:
-    if not payload:
-        return ()
-    rows: list[CodeHitResult] = []
-    prefix = f"{ref}:"
-    cursor = 0
-    while cursor < len(payload):
-        raw_ref_path, cursor = _read_until(payload, cursor, b"\0")
-        raw_line, cursor = _read_until(payload, cursor, b"\0")
-        raw_column, cursor = _read_until(payload, cursor, b"\0")
-        raw_text, cursor = _read_until(payload, cursor, b"\n")
-        ref_path = raw_ref_path.decode(errors="replace")
-        if not ref_path.startswith(prefix):
-            raise GitCorpusError("could not parse git grep output: malformed ref/path")
-        try:
-            line = int(raw_line.decode())
-            column = int(raw_column.decode())
-        except ValueError as exc:
-            raise GitCorpusError("could not parse git grep output: invalid line/column") from exc
-        rows.append(
-            CodeHitResult(
-                repo=repo,
-                ref=ref,
-                path=ref_path.removeprefix(prefix),
-                line=line,
-                column=column,
-                text=raw_text.decode(errors="replace").rstrip("\n"),
             )
         )
     return tuple(rows)

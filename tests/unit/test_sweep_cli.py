@@ -86,9 +86,7 @@ def _repo(full_name: str, source: Path, *, clone_url: str | None = None) -> dict
     }
 
 
-def test_sweep_table_has_predicate_columns(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sweep_table_has_predicate_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
     source = _source_repo(
         tmp_path,
@@ -119,9 +117,7 @@ def test_sweep_table_has_predicate_columns(
     assert "has-file:workflow.yml" in result.stdout
 
 
-def test_sweep_repo_pipe_record_shape(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sweep_repo_pipe_record_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
     source = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
 
@@ -145,9 +141,7 @@ def test_sweep_repo_pipe_record_shape(
     assert envelope["record"]["hits"] == {"grep:acme/action": 1}
 
 
-def test_sweep_match_pipe_record_shape(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sweep_match_pipe_record_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
     source = _source_repo(tmp_path, "api", {"README.md": "uses: acme/action@v1\n"})
 
@@ -234,9 +228,7 @@ def test_invalid_pattern_errors_before_sync(
     assert mock.calls == []
 
 
-def test_invalid_path_errors_before_sync(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_invalid_path_errors_before_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
 
     with respx.mock(base_url="https://api.github.com", assert_all_called=False) as mock:

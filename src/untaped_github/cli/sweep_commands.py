@@ -63,11 +63,15 @@ def sweep_command(
     ] = None,
     not_grep: Annotated[
         list[str] | None,
-        Parameter(name="--not-grep", help="Content regex that must not match.", consume_multiple=False),
+        Parameter(
+            name="--not-grep", help="Content regex that must not match.", consume_multiple=False
+        ),
     ] = None,
     path: Annotated[
         list[str] | None,
-        Parameter(name="--path", help="Git pathspec for content predicates.", consume_multiple=False),
+        Parameter(
+            name="--path", help="Git pathspec for content predicates.", consume_multiple=False
+        ),
     ] = None,
     has_file: Annotated[
         list[str] | None,
@@ -75,7 +79,9 @@ def sweep_command(
     ] = None,
     lacks_file: Annotated[
         list[str] | None,
-        Parameter(name="--lacks-file", help="File glob that must not exist.", consume_multiple=False),
+        Parameter(
+            name="--lacks-file", help="File glob that must not exist.", consume_multiple=False
+        ),
     ] = None,
     any_mode: Annotated[bool, Parameter(name="--any", negative="")] = False,
     ignore_case: Annotated[bool, Parameter(name=["--ignore-case", "-i"], negative="")] = False,
@@ -91,7 +97,7 @@ def sweep_command(
     ] = None,
     sync: Annotated[
         bool | None,
-        Parameter(name="--sync", negative="--no-sync", help="Force sync or scan cache only."),
+        Parameter(name="--sync", negative="--no-sync", help="Force sync or use cache only."),
     ] = None,
     show: Annotated[
         Literal["repos", "matches"],
@@ -106,7 +112,11 @@ def sweep_command(
     parallel: ParallelOption = None,
 ) -> None:
     """Sweep repository refs for content and file-presence predicates."""
-    from untaped_github.application import ResolveRepositoryInventory, Sweep, SweepOptions  # noqa: PLC0415
+    from untaped_github.application import (  # noqa: PLC0415
+        ResolveRepositoryInventory,
+        Sweep,
+        SweepOptions,
+    )
     from untaped_github.domain import RefSelector, SweepQuery  # noqa: PLC0415
     from untaped_github.infrastructure import GitCorpusCache  # noqa: PLC0415
     from untaped_github.infrastructure.git_corpus import git_auth_header  # noqa: PLC0415
@@ -167,7 +177,9 @@ def sweep_command(
 
         if show == "matches":
             rows = _match_records(report.matches)
-            emit(rows, fmt=fmt, columns=columns, kind="github.sweep_match", empty="No matches found.")
+            emit(
+                rows, fmt=fmt, columns=columns, kind="github.sweep_match", empty="No matches found."
+            )
         else:
             rows = _repo_records(report.rows)
             emit(

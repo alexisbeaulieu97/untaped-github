@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from untaped_github.domain import (
-        CodeHitResult,
         CorpusFreshness,
         CorpusRepoResult,
         CorpusRepoTarget,
@@ -72,16 +71,7 @@ class GithubRepositoryInventoryService(GithubRepoListService, Protocol):
 
 
 class GitCorpus(Protocol):
-    """Local Git corpus operations used by scan commands."""
-
-    def sync_default_branch(
-        self,
-        repo: CorpusRepoTarget,
-        *,
-        root: Path,
-        depth: int,
-        auth_header: str | None,
-    ) -> CorpusRepoResult: ...
+    """Local Git corpus operations used by sweep and cache commands."""
 
     def sync_repo(
         self,
@@ -94,21 +84,6 @@ class GitCorpus(Protocol):
     ) -> CorpusRepoResult: ...
 
     def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None: ...
-
-    def has_default_branch(self, repo: CorpusRepoTarget, *, root: Path) -> bool: ...
-
-    def grep_default_branch(
-        self,
-        repo: CorpusRepoTarget,
-        *,
-        root: Path,
-        pattern: str,
-        paths: tuple[str, ...],
-        globs: tuple[str, ...],
-        ignore_case: bool,
-        fixed_strings: bool,
-        word_regexp: bool,
-    ) -> tuple[CodeHitResult, ...]: ...
 
     def local_refs(
         self,
