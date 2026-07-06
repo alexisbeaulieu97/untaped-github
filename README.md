@@ -4,9 +4,9 @@
 [`untaped`](https://github.com/alexisbeaulieu97/untaped) SDK. It provides
 authenticated user inspection, complete org/team repository inventory,
 GitHub REST search across repositories, code, issues/PRs, and users/orgs,
-and a local Git corpus scanner for repeated team-wide code scans. It also
-ships the shared `config`, `profile`, and `skills` command groups every
-untaped tool ships.
+and a question-first `sweep` command for repeated team-wide code and file
+presence checks over a managed local Git corpus. It also ships the shared
+`config`, `profile`, and `skills` command groups every untaped tool ships.
 
 ## Install
 
@@ -37,15 +37,26 @@ per-profile keys too (e.g. `untaped-github config set http.verify_ssl false`).
 ```text
 untaped-github whoami
 untaped-github repos list [PATTERN] [--org ORG]... [--team ORG/SLUG|SLUG]...
-untaped-github scan sync --org ORG|--team ORG/SLUG|--repo OWNER/NAME
-untaped-github scan grep PATTERN --org ORG|--team ORG/SLUG|--repo OWNER/NAME
-untaped-github scan list|worktree ...
-untaped-github scan clean --repo OWNER/NAME|--all [--yes|-y]
+untaped-github sweep --org ORG|--team ORG/SLUG|--repo OWNER/NAME --grep PATTERN
+untaped-github sweep --org ORG --has-file GLOB [--not-grep PATTERN] [--fail-on-match]
+untaped-github cache status|worktree ...
+untaped-github cache clean --repo OWNER/NAME|--all|--prune [--yes|-y]
 untaped-github search repos [QUERY]
 untaped-github search code [QUERY]
 untaped-github search issues [QUERY]
 untaped-github search users [QUERY]
 untaped-github config|profile|skills ...
+```
+
+Examples:
+
+```bash
+untaped-github sweep --org acme --grep 'old_api' --not-grep 'new_api'
+untaped-github sweep --team acme/platform --grep 'log4j' --fail-on-match
+untaped-github sweep --org acme --grep 'old_api' \
+  --format raw --columns clone_url \
+  | untaped-workspace add --stdin --workspace remediation
+untaped-github cache status --format table
 ```
 
 See [docs/github.md](./docs/github.md) for command details and examples.

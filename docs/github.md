@@ -3,9 +3,9 @@
 `untaped-github` is a standalone CLI, built on the
 [`untaped`](https://github.com/alexisbeaulieu97/untaped) SDK, that inspects
 the authenticated user, lists complete org/team repository inventory, searches
-GitHub for repositories, code, issues/PRs, and users/orgs, and keeps a local
-Git corpus for repeated team-wide code scans. Commands that talk to GitHub
-authenticate with the token from the tool's `token` setting.
+GitHub for repositories, code, issues/PRs, and users/orgs, and sweeps a local
+Git corpus for repeated team-wide code and file-presence checks. Commands that
+talk to GitHub authenticate with the token from the tool's `token` setting.
 Scoped search commands default to the authenticated user, so bare scoped
 searches answer "what's mine?".
 
@@ -32,7 +32,7 @@ use the API path:
 untaped-github config set base_url https://github.example.com/api/v3
 ```
 
-The local scan corpus defaults to `~/.untaped/github-corpus` and can be
+The local sweep corpus defaults to `~/.untaped/github-corpus` and can be
 changed with:
 
 ```bash
@@ -133,75 +133,124 @@ pattern and boolean filters do not reduce GitHub page count; the command
 fetches the selected org/team scopes to exhaustion before filtering. Server
 side list parameters, caching, and a debugging limit are deferred.
 
-### `scan`
+### `sweep`
 
-`untaped-github scan` is for repeatable local code scans over org/team/repo
-inventory. It deliberately avoids GitHub Search APIs. Scoped scan commands
-still use normal REST inventory endpoints to expand `--org`, `--team`, and
-`--repo`, but the code search itself runs locally over a managed bare Git
-corpus. The scanner shells out to `git`; Git must be available on `PATH`.
+`untaped-github sweep` answers "which repositories match this question?" over
+a managed local Git corpus. It deliberately avoids GitHub Search APIs for the
+code search itself. Online sweeps use REST inventory to expand `--org`,
+`--team`, and `--repo`, then fetch and evaluate locally with `git`; Git must be
+available on `PATH`.
 
 ```bash
-untaped-github scan sync --team acme/backend
-untaped-github scan grep 'uses: acme/action' --team acme/backend --sync
-untaped-github scan grep 'BaseModel' --org acme --path pyproject.toml
-untaped-github scan list
-untaped-github scan worktree acme/api --format raw --columns path
-untaped-github scan clean --repo acme/api -y
-untaped-github scan clean --all --yes
+untaped-github sweep --org acme --grep 'requests\.get\(' --path 'src/**' --has-file Jenkinsfile
+untaped-github sweep --team acme/platform --grep log4j --grep slf4j --any
+untaped-github sweep --org acme --grep old_api --not-grep new_api
+untaped-github sweep --org acme --ref 'release/*' --grep jenkins --show matches
+untaped-github sweep --org acme --grep 'dangerous_call' --fail-on-match
 ```
 
-`scan sync` clones or refreshes each repository's current default branch into
-the local corpus. The corpus is a managed set of bare repositories under
-`github.corpus_path`, defaulting to `~/.untaped/github-corpus`. Fetches are
-shallow by default (`--depth 1`) and blobful: unlike Ansible's dependency
-index refresh, scan needs blobs locally so `git grep <ref>` can run without
-lazy network fetches.
+Every sweep needs a scope (`--org`, `--team`, `--repo`, or `--stdin`) and at
+least one predicate. Content predicates are `--grep PATTERN` and
+`--not-grep PATTERN`; file-presence predicates are `--has-file GLOB` and
+`--lacks-file GLOB`. `--path PATHSPEC` narrows content predicates and must be
+paired with a content predicate. `--ignore-case`/`-i`,
+`--fixed-strings`/`-F`, and `--word-regexp`/`-w` apply to every content
+predicate in the query.
 
-`scan grep PATTERN` runs `git grep` against cached default branches. It uses
-the corpus as-is by default. Pass `--sync` to refresh matching scopes before
-searching; without `--sync`, missing cached repos fail with an actionable
-message. A no-match repository is not a failure: `git grep` exit code `1`
-means success with zero hits, while exit codes above `1` are reported as
-per-repo failures. Binary files are skipped with `git grep -I`; scan output is
-line-oriented text intended for code review and follow-up shell tools.
+Positive predicates combine with AND by default. `--any` ORs positive
+predicates only; negated predicates always remain conjunctive. Predicate
+labels in table and pipe output are stable:
+`grep:<pattern>`, `not-grep:<pattern>`, `has-file:<glob>`, and
+`lacks-file:<glob>`.
 
-Supported grep filters are intentionally small in v1:
+By default, sweeps cover each repository's default branch. `--refs branches`,
+`--refs tags`, and `--refs all` widen the cached profile; repeatable
+`--ref GLOB` adds matching branch/tag refs to the default branch. Cache
+metadata only widens, never narrows, so a later narrow sweep can reuse a wider
+cache.
+
+Sync behavior:
 
 | Flag | Effect |
 | ---- | ------ |
-| `--path PATH` | Git pathspec to scan; repeatable. |
-| `--glob GLOB` | Git glob pathspec to scan; repeatable. |
-| `--ignore-case`/`-i` | Case-insensitive matching. |
-| `--fixed-strings`/`-F` | Treat pattern as a literal string. |
-| `--word-regexp`/`-w` | Match only whole words. |
+| default | Refresh uncached, stale, or under-profiled repos before scanning. |
+| `--sync` | Force a refresh for every repo in scope. |
+| `--no-sync` | Scan only local corpus metadata and cached refs; org/team live expansion is unavailable. |
+| `--depth N` | Git fetch depth; `0` is full. Default `1`. |
 | `--parallel`/`-j` | Parallel Git workers, capped at 32. |
 
-`scan grep` emits `github.code_hit` pipe records with stable fields:
-`repo`, `ref`, `path`, `line`, `column`, and `text`. `column` is the first
-match on the matching line. V1 does not emit a separate `match` substring
-because `git grep` cannot reliably provide substring, full line, line number,
-and column together in one invocation.
+Freshness uses `github.sweep.max_age_seconds` (default `3600`), and the
+worker default is `github.sweep.sync_concurrency` (default `12`). A failed
+refresh does not automatically fail the sweep: if the local cache already
+covers the requested refs, the repo is scanned from cache and counted as
+cached; otherwise it is listed in the unscanned bucket. The footer reports:
 
-`scan worktree REPO` materializes one cached repo/ref into a managed worktree
-and prints its path, which is the escape hatch for editor workflows or manual
-`rg`. Worktree resolution is local-corpus backed and does not need a REST
-inventory lookup after sync. In v1, `scan sync` fetches default branches; a
-custom `--ref` only works when that ref is already present in the local corpus,
-otherwise the command fails with a cached-ref message. Bulk human development
-workspaces remain the job of `untaped-workspace`; the scan corpus is optimized
-for local scans, not active development.
+```text
+Sweep: N matched of M scanned (R refreshed, C cached), oldest fetch <timestamp>
+warning: unscanned OWNER/NAME: <reason>
+```
 
-`scan list` and `scan clean` inspect and prune the managed corpus. `scan clean`
-requires either `--repo OWNER/NAME` or `--all`; both paths prompt before
-deleting unless `--yes`/`-y` is passed. It removes associated managed worktrees
-before deleting a bare repo and only removes paths under the configured corpus
-root. `scan list` skips corrupt cache metadata with a warning so healthy cache
-entries remain visible.
+Default exit code is `0` for no matches, matches, and non-strict unscanned
+gaps. `--fail-on-match` promotes any matching repo to exit `1`, which is the
+CI gate for banned patterns. `--strict` promotes any unscanned repo to exit
+`1`.
 
-V1 sync is default-branch-only and authenticated Git transport is HTTPS-only.
-All-branch/tag scans, SSH transport, ripgrep-native structured scanning, and
-sharing the corpus adapter with `untaped-ansible` are future work.
+The default `--show repos` output emits `github.sweep_repo` records with:
+`full_name`, `clone_url`, `refs_matched`, `hits`, `owners`, and `synced_at`.
+Table view shows `full_name`, one column per predicate label, `refs_matched`
+when refs go beyond default, and `owners`.
+
+`--show matches` emits `github.sweep_match` records with:
+`full_name`, `refs`, `path`, `line`, and `text`. Identical content reachable
+from multiple selected refs is deduped into one match row with multiple refs.
+
+Typed sweep records can feed another sweep because `--stdin` reads
+`full_name` from pipe envelopes or bare owner/name lines:
+
+```bash
+untaped-github repos list 'svc-*' --org acme --format pipe \
+  | untaped-github sweep --stdin --grep 'old_api' --format pipe \
+  | untaped-github sweep --stdin --not-grep 'new_api'
+```
+
+`untaped-workspace add --stdin` reads generic URL lines, not typed pipe
+records. Use raw URL output when turning matching repos into a workspace:
+
+```bash
+untaped-github sweep --org acme --grep 'old_api' \
+  --format raw --columns clone_url \
+  | untaped-workspace add --stdin --workspace remediation
+```
+
+### `cache`
+
+`untaped-github cache` exposes lifecycle commands for the managed local corpus:
+
+```bash
+untaped-github cache status
+untaped-github cache clean --repo acme/api --yes
+untaped-github cache clean --all --yes
+untaped-github cache clean --prune --org acme --yes
+untaped-github cache worktree acme/api --format raw --columns path
+```
+
+`cache status` emits `github.corpus_repo` rows with repo, ref, path,
+clone URL, status, fetched timestamp, fetch profile, ref globs, archived bit,
+and recursive disk size. It also prints cache count, total disk bytes, and the
+oldest/newest fetched timestamps.
+
+`cache clean` requires exactly one of `--repo`, `--all`, or `--prune`.
+Delete operations prompt unless `--yes`/`-y` is passed and remove managed
+worktrees before deleting a bare repo. `--prune` accepts `--org`/`--team`,
+resolves live inventory, and removes cached repos in scope that departed or
+are now archived.
+
+`cache worktree REPO` materializes one cached repo/ref into a managed worktree
+and prints its path. Worktree resolution is local-corpus backed and does not
+need a REST inventory lookup; `--ref` only works for refs already cached
+locally. Bulk human development workspaces remain the job of
+`untaped-workspace`; the sweep corpus is optimized for repeated local checks,
+not active development.
 
 ### `search`
 
