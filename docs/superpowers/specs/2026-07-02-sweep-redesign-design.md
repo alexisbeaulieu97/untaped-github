@@ -72,9 +72,10 @@ untaped-github repos list 'svc-*' --format pipe | untaped-github sweep --grep '.
 
 - `--org`, `--team` (repeatable), repo patterns — resolved through the
   existing public `ResolveRepositoryInventory`, unchanged.
-- Piped repo records on stdin: any records carrying an `org/repo` full name
-  (including `github.repo` and `github.sweep.repo` kinds) are accepted as
-  scope. This makes sweep→sweep chains work.
+- Piped repo records on stdin: any records carrying a `full_name` field
+  (`org/repo`) are accepted as scope — the SDK's `read_identifiers` extracts
+  by field, never by kind, so `github.repo` and `github.sweep_repo` records
+  both work (Amendment 1). This makes sweep→sweep chains work.
 - Archived repos are excluded by default; `--archived` opts in (matching
   `repos list` semantics).
 
@@ -100,7 +101,8 @@ Flat boolean model. Three mechanisms, no expression grammar:
 1. **Content OR via regex alternation** inside a single pattern:
    `--grep 'log4j|slf4j'`.
 2. **Cross-predicate AND by default**; one flag `--any` flips the repo-level
-   combination to OR.
+   combination of the *positive* predicates to OR. Negated predicates are
+   always conjunctive filters, `--any` or not (Amendment 3).
 3. **Negation on the predicate, not in a grammar**: `--not-grep`,
    `--lacks-file`.
 
@@ -137,9 +139,12 @@ The corpus becomes an invisible, self-managing cache:
   repos in its scope.
 - **Scope-only auto-sync, freshness-bounded:** before scanning, any repo in
   scope staler than `max_age` (config `github.sweep.max_age`, default 1h) is
-  refreshed; the org/team inventory obeys the same max-age so new repos
-  appear without a manual step. `--sync` forces a full refresh of the scope;
-  `--no-sync` scans what is on disk (fully offline).
+  refreshed. The org/team inventory is resolved live on every online sweep
+  (one paginated request per ~100 repos — negligible; no inventory cache
+  layer, Amendment 4), so new repos appear without a manual step. `--sync`
+  forces a full refresh of the scope; `--no-sync` scans what is on disk
+  (fully offline) and resolves scope from the corpus's own per-repo
+  metadata instead of the API.
 - **Freshness is visible, never silent:** the report footer states oldest
   fetch in scope and refreshed-vs-cached counts.
 - **Failures don't kill the sweep:** a repo that cannot be fetched or
@@ -167,16 +172,18 @@ The corpus becomes an invisible, self-managing cache:
   skips. **Non-goal:** Teams-API enrichment (burns the request budget;
   CODEOWNERS answers "who do I ping").
 - **Pipe records** (ecosystem `--format pipe` conventions):
-  - `github.sweep.repo` — id_field `org/repo` full name; fields include
+  - `github.sweep_repo` — id_field `full_name` (`org/repo`); fields include
     clone URL, per-predicate hit counts, refs matched, owners, synced-at.
     Designed so `sweep ... --format pipe | untaped workspace ...` clones
-    exactly the flagged repos.
-  - `github.sweep.match` — repo, ref, path, line, text (with `--show
+    exactly the flagged repos. (Kind renamed by Amendment 1 — the SDK 3.0
+    kind grammar allows no third segment except `.summary`.)
+  - `github.sweep_match` — repo, ref, path, line, text (with `--show
     matches`).
-- **Exit codes are grep-shaped:** 0 = ran clean with matches, 1 = ran clean
-  with no matches, standard error codes otherwise; `--strict` promotes an
-  unscanned bucket to failure. This makes sweep usable as a CI "this pattern
-  must not exist" gate.
+- **Exit codes are fleet-standard** (Amendment 2): 0 = ran clean (matches or
+  not), 1 = per-repo failures, usage errors as usual; `--strict` promotes an
+  unscanned bucket to failure. The CI "this pattern must not exist" gate is
+  the explicit `--fail-on-match` flag: any match → exit 1, no matches →
+  exit 0, errors stay errors (never inverted away by shell `!`).
 
 ### Command-surface changes
 
@@ -270,3 +277,42 @@ this spec, absorbs that).
 - Hosted-search-as-shortlist optimization inside sweep — rejected for now;
   the full mirror is cheap at this org scale, and shortlist gaps are silent
   false negatives.
+
+## Amendments (2026-07-06)
+
+Joint spec re-review against landed code (github 0.13.0, untaped SDK 3.0 —
+both shipped after this spec was locked). Body text above has been corrected
+in place where it would otherwise mislead; each correction points here.
+
+1. **Pipe kinds renamed: `github.sweep_repo` / `github.sweep_match`.** The
+   originally specced `github.sweep.repo` / `github.sweep.match` are illegal
+   under SDK 3.0's emit-time kind grammar (`<tool>.<noun>` in snake_case;
+   the only permitted third segment is the literal `.summary`) — emitting
+   them raises `ValueError` on the first row. The new names match the
+   tool's existing `github.code_hit` / `github.corpus_repo` convention.
+   Corollary: stdin scope acceptance is by the `full_name` field, not by
+   kind — the SDK's `read_identifiers` never filters on kind.
+2. **Exit codes: fleet-standard + `--fail-on-match`, replacing the
+   grep-shaped contract.** "0 = matches, 1 = no matches" failed its own
+   motivating use case: the CI "pattern must not exist" gate would be
+   written `! sweep ...`, and shell negation converts *any* nonzero —
+   including auth failures and usage errors — into a passing gate. Sweep
+   now follows the fleet's `finish()` contract (0 clean, 1 per-repo
+   failures, `--strict` promotes the unscanned bucket), and the CI gate is
+   the explicit `--fail-on-match` flag: any match → exit 1, no matches →
+   exit 0, errors remain distinct failures.
+3. **`--any` combines positive predicates only.** Negated predicates
+   (`--not-grep`, `--lacks-file`) are always conjunctive filters. A literal
+   OR over negations ("contains A, or lacks B") matches nearly every repo —
+   a footgun with no known use.
+4. **No inventory cache layer.** The original "the org/team inventory obeys
+   the same max-age" implied caching inventory results per scope — a whole
+   new state layer. Instead: online sweeps resolve the inventory live every
+   time (paginated listing, ~1 request per 100 repos), and `--no-sync`
+   resolves scope from the corpus's per-repo metadata on disk, making
+   offline sweeps self-contained. Repo-level `max_age` freshness is
+   unaffected.
+5. **Refs axis re-litigated and reaffirmed.** The multi-ref axis (`--refs`,
+   `--ref` globs, fetch profiles, widening, blob-OID dedup) was challenged
+   as the largest speculative corpus investment; Alexis ruled to keep it in
+   v1 as specced.
