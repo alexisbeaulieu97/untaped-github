@@ -63,6 +63,7 @@ class RepoSweepOutcome:
     """Aggregated sweep result for one repository."""
 
     full_name: str
+    clone_url: str | None
     matched: bool
     refs_matched: tuple[str, ...]
     hits: Mapping[str, int]

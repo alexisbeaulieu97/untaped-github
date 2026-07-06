@@ -5,6 +5,7 @@ import pytest
 from untaped_github.domain.sweep import (
     RefEvaluation,
     RefSelector,
+    RepoSweepOutcome,
     SweepQuery,
     profile_join,
     ref_matches,
@@ -56,6 +57,20 @@ def test_content_modifiers_do_not_perturb_labels() -> None:
         "has-file:pyproject.toml",
         "lacks-file:setup.py",
     )
+
+
+def test_repo_sweep_outcome_carries_clone_url_for_pipe_record() -> None:
+    outcome = RepoSweepOutcome(
+        full_name="acme/api",
+        clone_url="https://github.example.com/acme/api.git",
+        matched=True,
+        refs_matched=("main",),
+        hits={"grep:old_api": 1},
+        owners=("@team",),
+        synced_at="2026-07-06T12:00:00+00:00",
+    )
+
+    assert outcome.clone_url == "https://github.example.com/acme/api.git"
 
 
 def test_all_positive_predicates_must_hit() -> None:
