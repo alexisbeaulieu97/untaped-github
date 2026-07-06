@@ -1,3 +1,4 @@
+from untaped_github.domain.codeowners import CODEOWNERS_LOCATIONS, CodeownersRules, parse_codeowners
 from untaped_github.domain.corpus import CorpusFailure, CorpusRepoTarget
 from untaped_github.domain.models import (
     BatchRepoRefsFailure,
@@ -31,11 +32,13 @@ from untaped_github.domain.sweep import (
 )
 
 __all__ = [
+    "CODEOWNERS_LOCATIONS",
     "BatchRepoRefsFailure",
     "BatchRepoRefsResult",
     "CodeHitResult",
     "CodeResult",
     "CodeSearchFilters",
+    "CodeownersRules",
     "CorpusFailure",
     "CorpusRepoResult",
     "CorpusRepoTarget",
@@ -55,6 +58,7 @@ __all__ = [
     "UserResult",
     "UserSearchFilters",
     "WorktreeResult",
+    "parse_codeowners",
     "profile_join",
     "ref_matches",
 ]
