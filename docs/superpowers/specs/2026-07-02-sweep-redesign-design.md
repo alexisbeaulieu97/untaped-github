@@ -88,8 +88,9 @@ Third axis of the query:
 - `--ref GLOB` (repeatable) for explicit ref patterns (`release/*`, `v2.*`).
 - **Repo-level rule: a repo matches if any selected ref satisfies the
   predicate combination.** Repo rows report which refs matched; match-level
-  output carries the ref. Identical content reachable from multiple refs is
-  deduplicated by blob OID in match display.
+  output carries `refs[]` for every selected ref sharing the deduped blob
+  (amended at plan review — see plan Amendments). Identical content reachable
+  from multiple refs is deduplicated by blob OID in match display.
 - Cost is opt-in and visible: disk and sync time scale with ref count.
   `default` stays the default; the cache never grows beyond what a sweep
   asked for; `cache status` reports per-profile disk.
@@ -134,9 +135,10 @@ The corpus becomes an invisible, self-managing cache:
   documented decision; the rationale (blobless breaks bare `git grep`) is
   recorded above.
 - **Fetch profiles:** per-repo cache metadata records which ref scope it
-  holds (default / branches / tags / all / patterns) and when it was last
-  fetched. A sweep needing a wider profile widens the fetch for exactly the
-  repos in its scope.
+  holds (default / branches / tags / all / patterns), whether the repo was
+  archived when synced, and when it was last fetched (amended at plan review —
+  see plan Amendments). A sweep needing a wider profile widens the fetch for
+  exactly the repos in its scope.
 - **Scope-only auto-sync, freshness-bounded:** before scanning, any repo in
   scope staler than `max_age` (config `github.sweep.max_age`, default 1h) is
   refreshed. The org/team inventory is resolved live on every online sweep
@@ -174,11 +176,13 @@ The corpus becomes an invisible, self-managing cache:
 - **Pipe records** (ecosystem `--format pipe` conventions):
   - `github.sweep_repo` — id_field `full_name` (`org/repo`); fields include
     clone URL, per-predicate hit counts, refs matched, owners, synced-at.
-    Designed so `sweep ... --format pipe | untaped workspace ...` clones
-    exactly the flagged repos. (Kind renamed by Amendment 1 — the SDK 3.0
-    kind grammar allows no third segment except `.summary`.)
-  - `github.sweep_match` — repo, ref, path, line, text (with `--show
-    matches`).
+    Designed so `sweep ... --format raw --columns clone_url |
+    untaped-workspace add --stdin ...` clones exactly the flagged repos
+    (amended at plan review — see plan Amendments). (Kind renamed by
+    Amendment 1 — the SDK 3.0 kind grammar allows no third segment except
+    `.summary`.)
+  - `github.sweep_match` — full_name, refs[], path, line, text (with `--show
+    matches`; amended at plan review — see plan Amendments).
 - **Exit codes are fleet-standard** (Amendment 2): 0 = ran (matches or not,
   gaps declared in the footer), usage errors as usual; exit 1 comes only from
   the two promotion flags — `--strict` (any unscanned repo → failure) and
