@@ -10,8 +10,11 @@ if TYPE_CHECKING:
 
     from untaped_github.domain import (
         CodeHitResult,
+        CorpusFreshness,
         CorpusRepoResult,
         CorpusRepoTarget,
+        GrepHit,
+        RefSelector,
         WorktreeResult,
     )
 
@@ -80,6 +83,18 @@ class GitCorpus(Protocol):
         auth_header: str | None,
     ) -> CorpusRepoResult: ...
 
+    def sync_repo(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        selector: RefSelector,
+        depth: int,
+        auth_header: str | None,
+    ) -> CorpusRepoResult: ...
+
+    def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None: ...
+
     def has_default_branch(self, repo: CorpusRepoTarget, *, root: Path) -> bool: ...
 
     def grep_default_branch(
@@ -94,6 +109,47 @@ class GitCorpus(Protocol):
         fixed_strings: bool,
         word_regexp: bool,
     ) -> tuple[CodeHitResult, ...]: ...
+
+    def local_refs(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        selector: RefSelector,
+    ) -> tuple[str, ...]: ...
+
+    def grep_ref(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str,
+        pattern: str,
+        paths: tuple[str, ...],
+        ignore_case: bool,
+        fixed_strings: bool,
+        word_regexp: bool,
+    ) -> tuple[GrepHit, ...]: ...
+
+    def tree_paths(self, repo: CorpusRepoTarget, *, root: Path, ref: str) -> tuple[str, ...]: ...
+
+    def read_blob(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str,
+        path: str,
+    ) -> str | None: ...
+
+    def validate_pattern(
+        self,
+        *,
+        root: Path,
+        pattern: str,
+        paths: tuple[str, ...],
+        fixed_strings: bool,
+    ) -> str | None: ...
 
     def list_repos(self, *, root: Path) -> tuple[CorpusRepoResult, ...]: ...
 

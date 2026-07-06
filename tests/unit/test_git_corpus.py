@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from untaped_github.domain import CorpusFreshness, CorpusRepoTarget, RefSelector, covers
+from untaped_github.domain import CorpusFreshness, CorpusRepoTarget, GrepHit, RefSelector, covers
 from untaped_github.domain.errors import GitCorpusError
 from untaped_github.infrastructure.git_corpus import (
     GitCorpusCache,
@@ -195,6 +195,175 @@ def test_covers_selector_containment() -> None:
     assert covers(tags, RefSelector(profile="tags", globs=("v*",)))
     assert not covers(tags, RefSelector(profile="tags", globs=("release/*",)))
     assert covers(all_refs, RefSelector(profile="branches", globs=("release/*",)))
+
+
+def test_grep_hits_carry_blob_oid_shared_across_refs(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "uses: acme/action@v1\n"})
+    _git(source, "checkout", "-q", "-b", "release/1")
+    _commit_file(source, "other.txt", "release only\n", "release")
+    _git(source, "checkout", "-q", "main")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="branches"),
+        depth=1,
+        auth_header=None,
+    )
+
+    main_hits = cache.grep_ref(
+        repo,
+        root=root,
+        ref="main",
+        pattern="acme/action",
+        paths=(),
+        ignore_case=False,
+        fixed_strings=False,
+        word_regexp=False,
+    )
+    release_hits = cache.grep_ref(
+        repo,
+        root=root,
+        ref="release/1",
+        pattern="acme/action",
+        paths=(),
+        ignore_case=False,
+        fixed_strings=False,
+        word_regexp=False,
+    )
+
+    assert main_hits == (
+        GrepHit(
+            path="README.md",
+            line=1,
+            text="uses: acme/action@v1",
+            blob_oid=main_hits[0].blob_oid,
+        ),
+    )
+    assert release_hits == (
+        GrepHit(
+            path="README.md",
+            line=1,
+            text="uses: acme/action@v1",
+            blob_oid=main_hits[0].blob_oid,
+        ),
+    )
+    assert main_hits[0].blob_oid
+
+
+def test_grep_no_match_vs_invalid_pattern(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "nothing here\n"})
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+
+    assert (
+        cache.grep_ref(
+            repo,
+            root=root,
+            ref="main",
+            pattern="acme/action",
+            paths=(),
+            ignore_case=False,
+            fixed_strings=False,
+            word_regexp=False,
+        )
+        == ()
+    )
+    with pytest.raises(GitCorpusError, match=r"regular expression|brackets"):
+        cache.grep_ref(
+            repo,
+            root=root,
+            ref="main",
+            pattern="[",
+            paths=(),
+            ignore_case=False,
+            fixed_strings=False,
+            word_regexp=False,
+        )
+
+
+def test_local_refs_default_first_then_sorted(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "checkout", "-q", "-b", "zeta")
+    _commit_file(source, "zeta.txt", "zeta\n", "zeta")
+    _git(source, "checkout", "-q", "main")
+    _git(source, "checkout", "-q", "-b", "alpha")
+    _commit_file(source, "alpha.txt", "alpha\n", "alpha")
+    _git(source, "checkout", "-q", "main")
+    _git(source, "tag", "v2.0")
+    _git(source, "tag", "ignored")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="all", globs=("v*",)),
+        depth=1,
+        auth_header=None,
+    )
+
+    assert cache.local_refs(repo, root=root, selector=RefSelector(profile="branches")) == (
+        "main",
+        "alpha",
+        "zeta",
+    )
+    assert cache.local_refs(repo, root=root, selector=RefSelector(globs=("v*",))) == (
+        "main",
+        "v2.0",
+    )
+
+
+def test_tree_paths_recursive(tmp_path: Path) -> None:
+    source = _source_repo(
+        tmp_path,
+        "source",
+        {
+            "README.md": "main\n",
+            "nested/workflow.yml": "uses: acme/action@v1\n",
+        },
+    )
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+
+    assert cache.tree_paths(repo, root=root, ref="main") == (
+        "README.md",
+        "nested/workflow.yml",
+    )
+
+
+def test_read_blob_returns_none_for_missing_path(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "hello\n"})
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+
+    assert cache.read_blob(repo, root=root, ref="main", path="README.md") == "hello\n"
+    assert cache.read_blob(repo, root=root, ref="main", path="missing.txt") is None
+
+
+def test_validate_pattern_flags_invalid_regex(tmp_path: Path) -> None:
+    cache = GitCorpusCache()
+
+    assert (
+        cache.validate_pattern(
+            root=tmp_path / "corpus", pattern="acme/action", paths=(), fixed_strings=False
+        )
+        is None
+    )
+    assert cache.validate_pattern(
+        root=tmp_path / "corpus",
+        pattern="[",
+        paths=(),
+        fixed_strings=False,
+    )
 
 
 def test_sync_fetches_blobful_default_branch_and_grep_parses_hits(tmp_path: Path) -> None:

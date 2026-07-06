@@ -21,6 +21,7 @@ from untaped_github.domain import (
     CorpusFreshness,
     CorpusRepoResult,
     CorpusRepoTarget,
+    GrepHit,
     RefProfile,
     RefSelector,
     WorktreeResult,
@@ -235,6 +236,132 @@ class GitCorpusCache:
             repo=repo.full_name,
             ref=branch,
         )
+
+    def local_refs(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        selector: RefSelector,
+    ) -> tuple[str, ...]:
+        """Return cached refs selected for a sweep, with default branch first."""
+        branch = _default_branch(repo)
+        bare = cache_path_for(_remote_url(repo), cache_dir=root)
+        if not (bare / "HEAD").is_file():
+            return ()
+        result = cast(
+            subprocess.CompletedProcess[str],
+            self._run(
+                ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags"],
+                cwd=bare,
+                capture_text=True,
+            ),
+        )
+        refs = (
+            _short_ref(ref)
+            for ref in (result.stdout or "").splitlines()
+            if _selector_covers_ref(selector, ref, default_branch=branch)
+        )
+        return _order_refs(tuple(dict.fromkeys(refs)), default_branch=branch)
+
+    def grep_ref(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str,
+        pattern: str,
+        paths: tuple[str, ...],
+        ignore_case: bool,
+        fixed_strings: bool,
+        word_regexp: bool,
+    ) -> tuple[GrepHit, ...]:
+        """Run ``git grep`` against one cached ref and include blob OIDs."""
+        bare = _cached_bare(repo, root=root)
+        args = ["grep", "-n", "--column", "-z", "-I"]
+        if ignore_case:
+            args.append("--ignore-case")
+        if fixed_strings:
+            args.append("--fixed-strings")
+        if word_regexp:
+            args.append("--word-regexp")
+        args.extend(["-e", pattern, ref, "--"])
+        args.extend(paths)
+        result = cast(
+            subprocess.CompletedProcess[bytes],
+            self._run(args, cwd=bare, capture_bytes=True, check=False),
+        )
+        if result.returncode == 1:
+            return ()
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode(errors="replace").strip()
+            raise GitCorpusError(stderr or f"git grep failed with status {result.returncode}")
+
+        oids: dict[str, str] = {}
+        hits: list[GrepHit] = []
+        for path, line, text in _parse_ref_grep_output(result.stdout or b"", ref=ref):
+            oid = oids.get(path)
+            if oid is None:
+                oid = _blob_oid(self, bare, ref=ref, path=path)
+                oids[path] = oid
+            hits.append(GrepHit(path=path, line=line, text=text, blob_oid=oid))
+        return tuple(hits)
+
+    def tree_paths(self, repo: CorpusRepoTarget, *, root: Path, ref: str) -> tuple[str, ...]:
+        """List paths in one cached ref tree."""
+        bare = _cached_bare(repo, root=root)
+        result = cast(
+            subprocess.CompletedProcess[bytes],
+            self._run(["ls-tree", "-r", "--name-only", "-z", ref], cwd=bare, capture_bytes=True),
+        )
+        return tuple(
+            part.decode(errors="replace") for part in (result.stdout or b"").split(b"\0") if part
+        )
+
+    def read_blob(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str,
+        path: str,
+    ) -> str | None:
+        """Read a text blob from one cached ref, returning None when absent."""
+        bare = _cached_bare(repo, root=root)
+        result = cast(
+            subprocess.CompletedProcess[bytes],
+            self._run(["show", f"{ref}:{path}"], cwd=bare, capture_bytes=True, check=False),
+        )
+        if result.returncode != 0:
+            return None
+        return (result.stdout or b"").decode(errors="replace")
+
+    def validate_pattern(
+        self,
+        *,
+        root: Path,
+        pattern: str,
+        paths: tuple[str, ...],
+        fixed_strings: bool,
+    ) -> str | None:
+        """Validate one grep pattern and its pathspecs in a scratch repository."""
+        managed_root = root.expanduser()
+        managed_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".validate-", dir=managed_root) as scratch:
+            scratch_path = Path(scratch)
+            self._run(["init", "-q"], cwd=scratch_path)
+            args = ["grep", "-n"]
+            if fixed_strings:
+                args.append("--fixed-strings")
+            args.extend(["-e", pattern, "--"])
+            args.extend(paths)
+            result = cast(
+                subprocess.CompletedProcess[str],
+                self._run(args, cwd=scratch_path, capture_text=True, check=False),
+            )
+        if result.returncode in {0, 1}:
+            return None
+        return _stderr_text(result)
 
     def list_repos(self, *, root: Path) -> tuple[CorpusRepoResult, ...]:
         """List repositories with corpus metadata under ``root``."""
@@ -573,6 +700,36 @@ def _selector_covers_ref(selector: RefSelector, ref: str, *, default_branch: str
     return any(fnmatch.fnmatchcase(name, glob) for glob in selector.globs)
 
 
+def _short_ref(ref: str) -> str:
+    if ref.startswith("refs/heads/"):
+        return ref.removeprefix("refs/heads/")
+    if ref.startswith("refs/tags/"):
+        return ref.removeprefix("refs/tags/")
+    return ref
+
+
+def _order_refs(refs: tuple[str, ...], *, default_branch: str) -> tuple[str, ...]:
+    ordered = sorted(ref for ref in refs if ref != default_branch)
+    if default_branch in refs:
+        return (default_branch, *ordered)
+    return tuple(ordered)
+
+
+def _cached_bare(repo: CorpusRepoTarget, *, root: Path) -> Path:
+    bare = cache_path_for(_remote_url(repo), cache_dir=root)
+    if not (bare / "HEAD").is_file():
+        raise GitCorpusError("repository is not in the local corpus")
+    return bare
+
+
+def _blob_oid(cache: GitCorpusCache, bare: Path, *, ref: str, path: str) -> str:
+    result = cast(
+        subprocess.CompletedProcess[str],
+        cache._run(["rev-parse", "--verify", f"{ref}:{path}"], cwd=bare, capture_text=True),
+    )
+    return (result.stdout or "").strip()
+
+
 def _auth_header_for_url(url: str, auth_header: str | None) -> str | None:
     if auth_header is None:
         return None
@@ -584,6 +741,34 @@ def _auth_header_for_url(url: str, auth_header: str | None) -> str | None:
     if parsed.scheme or url.startswith("git@"):
         raise GitCorpusError("authenticated Git corpus sync requires an HTTPS clone_url")
     return None
+
+
+def _parse_ref_grep_output(payload: bytes, *, ref: str) -> tuple[tuple[str, int, str], ...]:
+    if not payload:
+        return ()
+    rows: list[tuple[str, int, str]] = []
+    prefix = f"{ref}:"
+    cursor = 0
+    while cursor < len(payload):
+        raw_ref_path, cursor = _read_until(payload, cursor, b"\0")
+        raw_line, cursor = _read_until(payload, cursor, b"\0")
+        _raw_column, cursor = _read_until(payload, cursor, b"\0")
+        raw_text, cursor = _read_until(payload, cursor, b"\n")
+        ref_path = raw_ref_path.decode(errors="replace")
+        if not ref_path.startswith(prefix):
+            raise GitCorpusError("could not parse git grep output: malformed ref/path")
+        try:
+            line = int(raw_line.decode())
+        except ValueError as exc:
+            raise GitCorpusError("could not parse git grep output: invalid line") from exc
+        rows.append(
+            (
+                ref_path.removeprefix(prefix),
+                line,
+                raw_text.decode(errors="replace").rstrip("\n"),
+            )
+        )
+    return tuple(rows)
 
 
 def _parse_grep_output(payload: bytes, *, repo: str, ref: str) -> tuple[CodeHitResult, ...]:

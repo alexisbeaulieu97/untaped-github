@@ -37,6 +37,16 @@ class CorpusFreshness:
     archived: bool = False
 
 
+@dataclass(frozen=True)
+class GrepHit:
+    """One content match within a cached Git blob."""
+
+    path: str
+    line: int
+    text: str
+    blob_oid: str
+
+
 def covers(freshness: CorpusFreshness, selector: RefSelector) -> bool:
     """Return whether cached metadata already covers the requested selector."""
     return profile_join(freshness.profile, selector.profile) == freshness.profile and set(

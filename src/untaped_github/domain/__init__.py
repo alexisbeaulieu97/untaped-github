@@ -1,5 +1,11 @@
 from untaped_github.domain.codeowners import CODEOWNERS_LOCATIONS, CodeownersRules, parse_codeowners
-from untaped_github.domain.corpus import CorpusFailure, CorpusFreshness, CorpusRepoTarget, covers
+from untaped_github.domain.corpus import (
+    CorpusFailure,
+    CorpusFreshness,
+    CorpusRepoTarget,
+    GrepHit,
+    covers,
+)
 from untaped_github.domain.models import (
     BatchRepoRefsFailure,
     BatchRepoRefsResult,
@@ -44,6 +50,7 @@ __all__ = [
     "CorpusRepoResult",
     "CorpusRepoTarget",
     "GithubUser",
+    "GrepHit",
     "IssueResult",
     "IssueSearchFilters",
     "RefEvaluation",
