@@ -44,10 +44,10 @@ class SweepQuery:
         )
 
     def validate(self) -> None:
-        if not self.labels():
-            raise ValueError("sweep requires at least one predicate")
         if self.paths and not self.greps and not self.not_greps:
             raise ValueError("--path requires --grep or --not-grep; use --has-file for presence")
+        if not self.labels():
+            raise ValueError("sweep requires at least one predicate")
 
 
 @dataclass(frozen=True)
