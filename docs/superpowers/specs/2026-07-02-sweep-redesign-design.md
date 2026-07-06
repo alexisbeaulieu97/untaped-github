@@ -179,11 +179,11 @@ The corpus becomes an invisible, self-managing cache:
     kind grammar allows no third segment except `.summary`.)
   - `github.sweep_match` — repo, ref, path, line, text (with `--show
     matches`).
-- **Exit codes are fleet-standard** (Amendment 2): 0 = ran clean (matches or
-  not), 1 = per-repo failures, usage errors as usual; `--strict` promotes an
-  unscanned bucket to failure. The CI "this pattern must not exist" gate is
-  the explicit `--fail-on-match` flag: any match → exit 1, no matches →
-  exit 0, errors stay errors (never inverted away by shell `!`).
+- **Exit codes are fleet-standard** (Amendment 2): 0 = ran (matches or not,
+  gaps declared in the footer), usage errors as usual; exit 1 comes only from
+  the two promotion flags — `--strict` (any unscanned repo → failure) and
+  `--fail-on-match` (any match → failure, the CI "this pattern must not
+  exist" gate). Errors stay errors, never inverted away by shell `!`.
 
 ### Command-surface changes
 
