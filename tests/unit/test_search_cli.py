@@ -879,6 +879,16 @@ def test_search_repos_help_advertises_default_30(
     assert "exactly one --org" in result.output
 
 
+def test_search_code_help_points_to_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    result = CliInvoker().invoke(app, ["search", "code", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "Use sweep for exhaustive regex, path, negation" in result.output
+    assert "multi-ref queries" in result.output
+    assert "has no regex, caps at 1000 results" in result.output
+    assert "searches the default branch only" in result.output
+
+
 def test_search_code_default_limit_is_30(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # All four subcommands share SearchLimitOption — these tests pin
     # the contract per call site so a future refactor that hard-codes
