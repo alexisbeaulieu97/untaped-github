@@ -28,6 +28,7 @@ from untaped_github.application.search import (
     SearchRepos,
     SearchUsers,
 )
+from untaped_github.application.sweep import Sweep, SweepMatch, SweepOptions, SweepReport
 from untaped_github.application.whoami import WhoAmI
 
 __all__ = [
@@ -50,6 +51,10 @@ __all__ = [
     "SearchIssues",
     "SearchRepos",
     "SearchUsers",
+    "Sweep",
+    "SweepMatch",
+    "SweepOptions",
+    "SweepReport",
     "SyncCorpus",
     "SyncOptions",
     "TeamScope",
