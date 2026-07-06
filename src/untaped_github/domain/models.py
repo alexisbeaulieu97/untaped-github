@@ -98,6 +98,9 @@ class CorpusRepoResult(BaseModel):
     clone_url: str | None = None
     status: Literal["synced", "cached", "removed"] = "cached"
     fetched_at: str | None = None
+    profile: str = "default"
+    ref_globs: tuple[str, ...] = ()
+    archived: bool = False
 
 
 class CodeHitResult(BaseModel):

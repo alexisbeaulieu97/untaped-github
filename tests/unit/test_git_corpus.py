@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from untaped_github.domain import CorpusRepoTarget
+from untaped_github.domain import CorpusFreshness, CorpusRepoTarget, RefSelector, covers
 from untaped_github.domain.errors import GitCorpusError
-from untaped_github.infrastructure.git_corpus import GitCorpusCache, _auth_config_env, _redact
+from untaped_github.infrastructure.git_corpus import (
+    GitCorpusCache,
+    _auth_config_env,
+    _redact,
+    cache_path_for,
+)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -44,12 +50,151 @@ def _source_repo(tmp_path: Path, name: str, files: dict[str, str | bytes]) -> Pa
     return repo
 
 
+def _commit_file(repo: Path, rel: str, content: str, message: str) -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    _git(repo, "add", rel)
+    _git(repo, "commit", "-q", "-m", message)
+
+
 def _item(full_name: str, source: Path) -> CorpusRepoTarget:
     return CorpusRepoTarget(
         full_name=full_name,
         clone_url=source.as_uri(),
         default_branch="main",
     )
+
+
+def _has_ref(bare: Path, ref: str) -> bool:
+    result = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", ref],
+        cwd=bare,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def test_v1_metadata_reads_as_default_profile(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "hello\n"})
+    repo = _item("acme/api", source)
+    root = tmp_path / "corpus"
+    bare = cache_path_for(source.as_uri(), cache_dir=root)
+    bare.mkdir(parents=True)
+    (bare / "HEAD").write_text("ref: refs/heads/main\n")
+    (bare / "untaped-corpus.json").write_text(
+        '{"repo": "acme/api", "ref": "main", "clone_url": "'
+        + source.as_uri()
+        + '", "fetched_at": "2026-07-06T12:00:00+00:00"}\n'
+    )
+
+    freshness = GitCorpusCache().repo_freshness(repo, root=root)
+
+    assert freshness == CorpusFreshness(
+        fetched_at=datetime(2026, 7, 6, 12, 0, tzinfo=UTC),
+        profile="default",
+        ref_globs=(),
+        archived=False,
+    )
+
+
+def test_sync_widens_profile_and_keeps_union(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "checkout", "-q", "-b", "release/1")
+    _commit_file(source, "release.txt", "release\n", "release")
+    _git(source, "checkout", "-q", "main")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+
+    cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+    widened = cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="branches"),
+        depth=1,
+        auth_header=None,
+    )
+    bare = Path(widened.path)
+    freshness = cache.repo_freshness(repo, root=root)
+
+    assert widened.profile == "branches"
+    assert freshness is not None
+    assert freshness.profile == "branches"
+    assert _has_ref(bare, "refs/heads/main")
+    assert _has_ref(bare, "refs/heads/release/1")
+
+
+def test_sync_with_narrower_request_keeps_stored_scope(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "checkout", "-q", "-b", "release/1")
+    _commit_file(source, "release.txt", "release\n", "release")
+    _git(source, "checkout", "-q", "main")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+
+    cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="branches"),
+        depth=1,
+        auth_header=None,
+    )
+    narrowed = cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+
+    assert narrowed.profile == "branches"
+    assert _has_ref(Path(narrowed.path), "refs/heads/release/1")
+
+
+def test_ref_glob_fetches_matching_refs_only(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "checkout", "-q", "-b", "release/1")
+    _commit_file(source, "release.txt", "release\n", "release")
+    _git(source, "checkout", "-q", "main")
+    _git(source, "checkout", "-q", "-b", "feature")
+    _commit_file(source, "feature.txt", "feature\n", "feature")
+    _git(source, "checkout", "-q", "main")
+    _git(source, "tag", "v1.0")
+    _git(source, "tag", "ignored")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+
+    result = cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(globs=("release/*", "v*")),
+        depth=1,
+        auth_header=None,
+    )
+    bare = Path(result.path)
+
+    assert result.profile == "default"
+    assert result.ref_globs == ("release/*", "v*")
+    assert _has_ref(bare, "refs/heads/main")
+    assert _has_ref(bare, "refs/heads/release/1")
+    assert _has_ref(bare, "refs/tags/v1.0")
+    assert not _has_ref(bare, "refs/heads/feature")
+    assert not _has_ref(bare, "refs/tags/ignored")
+
+
+def test_covers_selector_containment() -> None:
+    fetched_at = datetime(2026, 7, 6, tzinfo=UTC)
+
+    default = CorpusFreshness(fetched_at=fetched_at, profile="default", ref_globs=())
+    branches = CorpusFreshness(fetched_at=fetched_at, profile="branches", ref_globs=())
+    tags = CorpusFreshness(fetched_at=fetched_at, profile="tags", ref_globs=("v*",))
+    all_refs = CorpusFreshness(fetched_at=fetched_at, profile="all", ref_globs=("release/*",))
+
+    assert covers(default, RefSelector())
+    assert not covers(default, RefSelector(profile="branches"))
+    assert covers(branches, RefSelector())
+    assert covers(branches, RefSelector(profile="branches"))
+    assert not covers(branches, RefSelector(profile="tags"))
+    assert covers(tags, RefSelector(profile="tags", globs=("v*",)))
+    assert not covers(tags, RefSelector(profile="tags", globs=("release/*",)))
+    assert covers(all_refs, RefSelector(profile="branches", globs=("release/*",)))
 
 
 def test_sync_fetches_blobful_default_branch_and_grep_parses_hits(tmp_path: Path) -> None:

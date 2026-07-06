@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hashlib
 import json
 import os
@@ -15,7 +16,16 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
 
-from untaped_github.domain import CodeHitResult, CorpusRepoResult, CorpusRepoTarget, WorktreeResult
+from untaped_github.domain import (
+    CodeHitResult,
+    CorpusFreshness,
+    CorpusRepoResult,
+    CorpusRepoTarget,
+    RefProfile,
+    RefSelector,
+    WorktreeResult,
+    profile_join,
+)
 from untaped_github.domain.errors import GitCorpusError
 
 DEFAULT_TIMEOUT = 60.0
@@ -55,7 +65,7 @@ class GitCorpusCache:
             bare.parent.mkdir(parents=True, exist_ok=True)
             self._run(["init", "--bare", str(bare)], timeout=self._slow_timeout)
         self._ensure_origin(bare, url, auth_header=scoped_auth_header)
-        args = ["fetch", "--prune", "origin"]
+        args = ["fetch", "--prune", "--no-tags", "origin"]
         if depth > 0:
             args.append(f"--depth={depth}")
         args.append(f"+refs/heads/{branch}:refs/heads/{branch}")
@@ -83,6 +93,95 @@ class GitCorpusCache:
             clone_url=url,
             status="synced",
             fetched_at=fetched_at,
+        )
+
+    def sync_repo(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        selector: RefSelector,
+        depth: int,
+        auth_header: str | None,
+    ) -> CorpusRepoResult:
+        """Fetch the requested ref profile into the managed bare corpus."""
+        branch = _default_branch(repo)
+        url = _remote_url(repo)
+        scoped_auth_header = _auth_header_for_url(url, auth_header)
+        bare = cache_path_for(url, cache_dir=root)
+        if not (bare / "HEAD").is_file():
+            bare.parent.mkdir(parents=True, exist_ok=True)
+            self._run(["init", "--bare", str(bare)], timeout=self._slow_timeout)
+        self._ensure_origin(bare, url, auth_header=scoped_auth_header)
+
+        stored = self.repo_freshness(repo, root=root)
+        profile = profile_join(stored.profile, selector.profile) if stored else selector.profile
+        ref_globs = _join_globs(stored.ref_globs if stored else (), selector.globs)
+        effective = RefSelector(profile=profile, globs=ref_globs)
+
+        self._fetch_refspecs(
+            bare,
+            url=url,
+            depth=depth,
+            auth_header=scoped_auth_header,
+            refspecs=_profile_refspecs(effective.profile, branch),
+        )
+        for glob in effective.globs:
+            for namespace in ("heads", "tags"):
+                self._fetch_optional_refspec(
+                    bare,
+                    url=url,
+                    depth=depth,
+                    auth_header=scoped_auth_header,
+                    refspec=f"+refs/{namespace}/{glob}:refs/{namespace}/{glob}",
+                )
+        self._prune_uncovered_refs(bare, selector=effective, default_branch=branch)
+
+        fetched_at = datetime.now(UTC).isoformat()
+        _write_metadata(
+            bare,
+            {
+                "repo": repo.full_name,
+                "ref": branch,
+                "clone_url": url,
+                "fetched_at": fetched_at,
+                "profile": effective.profile,
+                "ref_globs": list(effective.globs),
+                "archived": repo.archived,
+            },
+        )
+        return CorpusRepoResult(
+            repo=repo.full_name,
+            ref=branch,
+            path=str(bare),
+            clone_url=url,
+            status="synced",
+            fetched_at=fetched_at,
+            profile=effective.profile,
+            ref_globs=effective.globs,
+            archived=repo.archived,
+        )
+
+    def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None:
+        """Return cached fetch metadata for ``repo`` if present."""
+        metadata_path = cache_path_for(_remote_url(repo), cache_dir=root) / METADATA_FILE
+        if not metadata_path.is_file():
+            return None
+        data = _read_metadata(metadata_path)
+        fetched_at = _optional_str(data.get("fetched_at"))
+        if fetched_at is None:
+            return None
+        try:
+            fetched = datetime.fromisoformat(fetched_at)
+        except ValueError as exc:
+            raise GitCorpusError(
+                f"could not read corpus metadata {metadata_path}: invalid fetched_at"
+            ) from exc
+        return CorpusFreshness(
+            fetched_at=fetched,
+            profile=_metadata_profile(data),
+            ref_globs=_metadata_ref_globs(data),
+            archived=_metadata_archived(data),
         )
 
     def has_default_branch(self, repo: CorpusRepoTarget, *, root: Path) -> bool:
@@ -158,6 +257,9 @@ class GitCorpusCache:
                     clone_url=_optional_str(data.get("clone_url")),
                     status="cached",
                     fetched_at=_optional_str(data.get("fetched_at")),
+                    profile=_metadata_profile(data),
+                    ref_globs=_metadata_ref_globs(data),
+                    archived=_metadata_archived(data),
                 )
             )
         return tuple(row for row in rows if row.repo and row.ref)
@@ -175,6 +277,7 @@ class GitCorpusCache:
                 full_name=repo,
                 default_branch=_optional_str(data.get("ref")),
                 clone_url=_optional_str(data.get("clone_url")),
+                archived=_metadata_archived(data),
             )
         return None
 
@@ -242,6 +345,77 @@ class GitCorpusCache:
                 auth_header=auth_header,
                 auth_url=url,
             )
+
+    def _fetch_refspecs(
+        self,
+        bare: Path,
+        *,
+        url: str,
+        depth: int,
+        auth_header: str | None,
+        refspecs: tuple[str, ...],
+    ) -> None:
+        args = ["fetch", "--prune", "--no-tags", "origin"]
+        if depth > 0:
+            args.append(f"--depth={depth}")
+        args.extend(refspecs)
+        self._run(
+            args,
+            cwd=bare,
+            timeout=self._slow_timeout,
+            auth_header=auth_header,
+            auth_url=url,
+        )
+
+    def _fetch_optional_refspec(
+        self,
+        bare: Path,
+        *,
+        url: str,
+        depth: int,
+        auth_header: str | None,
+        refspec: str,
+    ) -> None:
+        args = ["fetch", "--prune", "origin"]
+        if depth > 0:
+            args.append(f"--depth={depth}")
+        args.append(refspec)
+        result = self._run(
+            args,
+            cwd=bare,
+            timeout=self._slow_timeout,
+            auth_header=auth_header,
+            auth_url=url,
+            capture_text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        stderr = _stderr_text(result)
+        if not stderr or "couldn't find remote ref" in stderr:
+            return
+        raise GitCorpusError(
+            f"git {' '.join(args)} failed: {_redact(stderr, auth_header) or 'no stderr'}"
+        )
+
+    def _prune_uncovered_refs(
+        self,
+        bare: Path,
+        *,
+        selector: RefSelector,
+        default_branch: str,
+    ) -> None:
+        result = cast(
+            subprocess.CompletedProcess[str],
+            self._run(
+                ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags"],
+                cwd=bare,
+                capture_text=True,
+            ),
+        )
+        for ref in (result.stdout or "").splitlines():
+            if not _selector_covers_ref(selector, ref, default_branch=default_branch):
+                self._run(["update-ref", "-d", ref], cwd=bare)
 
     def _ref_exists(self, bare: Path, ref: str) -> bool:
         result = self._run(
@@ -371,6 +545,34 @@ def _remote_url(repo: CorpusRepoTarget) -> str:
     return f"https://github.com/{repo.full_name}.git"
 
 
+def _join_globs(stored: tuple[str, ...], requested: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*stored, *requested)))
+
+
+def _profile_refspecs(profile: RefProfile, branch: str) -> tuple[str, ...]:
+    if profile == "default":
+        return (f"+refs/heads/{branch}:refs/heads/{branch}",)
+    if profile == "branches":
+        return ("+refs/heads/*:refs/heads/*",)
+    if profile == "tags":
+        return ("+refs/tags/*:refs/tags/*",)
+    return ("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+
+
+def _selector_covers_ref(selector: RefSelector, ref: str, *, default_branch: str) -> bool:
+    if ref.startswith("refs/heads/"):
+        name = ref.removeprefix("refs/heads/")
+        if selector.profile in {"branches", "all"} or name == default_branch:
+            return True
+    elif ref.startswith("refs/tags/"):
+        name = ref.removeprefix("refs/tags/")
+        if selector.profile in {"tags", "all"}:
+            return True
+    else:
+        return False
+    return any(fnmatch.fnmatchcase(name, glob) for glob in selector.globs)
+
+
 def _auth_header_for_url(url: str, auth_header: str | None) -> str | None:
     if auth_header is None:
         return None
@@ -433,7 +635,7 @@ def _safe_path_part(value: str) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
 
 
-def _write_metadata(path: Path, data: dict[str, str]) -> None:
+def _write_metadata(path: Path, data: dict[str, object]) -> None:
     target = path / METADATA_FILE
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, sort_keys=True) + "\n")
@@ -454,6 +656,24 @@ def _read_metadata(path: Path) -> dict[str, object]:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _metadata_profile(data: dict[str, object]) -> RefProfile:
+    value = data.get("profile")
+    if value in {"default", "branches", "tags", "all"}:
+        return cast(RefProfile, value)
+    return "default"
+
+
+def _metadata_ref_globs(data: dict[str, object]) -> tuple[str, ...]:
+    value = data.get("ref_globs")
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
+
+
+def _metadata_archived(data: dict[str, object]) -> bool:
+    return bool(data.get("archived", False))
 
 
 def _auth_config_env(auth_header: str, *, auth_url: str | None) -> tuple[dict[str, str], Path]:
