@@ -498,10 +498,10 @@ class GitCorpusCache:
         auth_config_path: Path | None = None
         if auth_header is not None:
             env, auth_config_path = _auth_config_env(auth_header, auth_url=auth_url)
-        capture_stdout = subprocess.PIPE if capture_text or capture_bytes else None
-        capture_stderr = (
-            subprocess.PIPE if capture_text or capture_bytes or auth_header is not None else None
-        )
+        # Never inherit the CLI's stdio: stray git chatter would corrupt piped
+        # output, and piping stderr keeps failure text available for errors.
+        capture_stdout = subprocess.PIPE if capture_text or capture_bytes else subprocess.DEVNULL
+        capture_stderr = subprocess.PIPE
         try:
             result = subprocess.run(
                 [self._git_path, *args],
