@@ -11,7 +11,8 @@ This file keeps only `untaped-github` rules, contracts, and gotchas.
 `untaped-github` is a standalone CLI built on the `untaped` SDK, invoked as
 `untaped-github`. It provides authenticated user inspection, GitHub REST
 search (`repos`, `code`, `issues`, `users`), complete org/team repository
-inventory, and local Git-corpus scans for repeated team-wide code searches.
+inventory, and question-first `sweep` workflows for repeated team-wide code
+and file-presence checks over a managed local Git corpus.
 The `untaped` SDK owns shared config, output, HTTP/TLS, profile, and error
 machinery.
 
@@ -31,9 +32,10 @@ machinery.
    with `login`; repo search and repo-list rows start with `full_name` and emit
    `github.repo`; issue search rows start with `repo` and emit `github.issue`;
    user search rows start with `id` and emit `github.user`; code search rows
-   start with `name` and emit `github.code`; scan grep rows start with `repo`
-   and emit `github.code_hit`; corpus/worktree rows start with `repo` and emit
-   `github.corpus_repo` / `github.worktree`.
+   start with `name` and emit `github.code`; sweep repo rows start with
+   `full_name` and emit `github.sweep_repo`; sweep match rows start with
+   `full_name` and emit `github.sweep_match`; corpus/worktree rows start with
+   `repo` and emit `github.corpus_repo` / `github.worktree`.
 4. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
    `.get_secret_value()` only inside the HTTP adapter.
 5. **Build GitHub HTTP clients with `connected_client(...)`.** GitHub clients
@@ -117,8 +119,11 @@ Adding a field is a two-place edit: `GithubSettings` plus the constructor
 or call site that consumes it.
 
 `github.corpus_path` defaults to `~/.untaped/github-corpus` and is owned by
-the `scan` command group. It stores managed bare repositories and worktrees
-used for local scans; do not treat it as a human development workspace.
+the `sweep` and `cache` command groups. It stores managed bare repositories
+and worktrees used for local sweeps; do not treat it as a human development
+workspace. `github.sweep.max_age_seconds` defaults to `3600`, and
+`github.sweep.sync_concurrency` defaults to `12` before the existing SDK
+parallel clamp is applied.
 
 ## HTTP Wiring
 
@@ -234,33 +239,59 @@ Future high-volume features should honor `X-RateLimit-Remaining` and
 GraphQL (`batch_repo_refs`) draws on a separate 5000 points/hour budget;
 see "GraphQL Batched Ref Probe" above for cost math.
 
-## Local Scan Corpus
+## Sweep and Cache Corpus
 
-`scan` is a Cyclopts sub-app for local, repeatable code scans. It is not a
-GitHub Search wrapper and must not call `/search/*`.
+`sweep` is the primary local Git-corpus workflow. It is question-first:
+scope plus refs plus predicates produce either matching repository rows or
+deduped match rows. It is not a GitHub Search wrapper and must not call
+`/search/*`; online sweeps use REST inventory only to resolve scopes, then
+fetch and evaluate locally with `git`.
 
-- `scan sync` expands inventory scopes through `ResolveRepositoryInventory`
-  and fetches each repo's current default branch into a deterministic bare
-  repo under `github.corpus_path`.
-- `scan grep` expands scopes with REST inventory, then runs local `git grep`
-  against cached default branches. It uses cache-as-is unless `--sync` is
-  passed. `git grep` exit `1` is a successful no-match, not a failure.
-  Binary files are skipped with `git grep -I`.
-- `scan worktree` materializes one cached repo/ref for editor or manual `rg`
-  workflows. It resolves repository metadata from the local corpus instead of
-  live REST inventory; `--ref` only works for refs already cached locally. Bulk
-  human workspaces belong to `untaped-workspace`.
-- `scan list` and `scan clean` inspect/prune the managed corpus. Clean
-  operations require `--repo` or `--all`; both paths prompt before deleting
-  unless `--yes`/`-y` is passed, remove managed worktrees before deleting a bare
-  repo, and must refuse paths outside the managed root. List skips corrupt
-  metadata entries with a warning instead of hiding healthy rows.
-
-The corpus fetch is shallow and blobful by default. Do not add
-`--filter=blob:none` to scan fetches: `git grep <ref>` needs blobs present
-locally. V1 sync is default-branch-only and authenticated Git transport is
-HTTPS-token-backed. SSH, all-ref scans, and `untaped-ansible` adoption require
-separate designs.
+- `sweep` requires at least one scope (`--org`, `--team`, `--repo`, or
+  `--stdin`) and at least one predicate (`--grep`, `--not-grep`,
+  `--has-file`, or `--lacks-file`). `--path` only scopes content predicates;
+  by itself it is a usage error that should point users at `--has-file`.
+- Content predicates run through `git grep -I` so binary files are skipped.
+  `--ignore-case`/`-i`, `--fixed-strings`/`-F`, and `--word-regexp`/`-w`
+  apply to every content predicate in the query. Positive predicates combine
+  with AND by default, `--any` ORs positive predicates only, and negated
+  predicates always remain conjunctive. Predicate labels stay
+  `grep:<pattern>`, `not-grep:<pattern>`, `has-file:<glob>`, and
+  `lacks-file:<glob>`.
+- Up-front validation uses a scratch `git grep` call for each content pattern
+  with all `--path` pathspecs attached, so bad regexes and bad pathspecs fail
+  before any sync work. `--has-file`, `--lacks-file`, and `--ref` globs are
+  evaluated in-process and are not pre-validated.
+- Fetches are shallow and blobful by default; do not add
+  `--filter=blob:none` because `git grep <ref>` needs blobs present locally.
+  Fetch profiles are `default`, `branches`, `tags`, and `all`, with additional
+  `--ref` globs unioned in. Corpus metadata records the fetched profile,
+  ref globs, clone URL, and archived bit; profiles only widen and never
+  narrow.
+- Online sweeps refresh uncached, stale, or under-profiled repos, with staleness
+  controlled by `github.sweep.max_age_seconds`. `--sync` forces a refresh;
+  `--no-sync` scans only what metadata says is available on disk. If refresh
+  fails but the cached copy already covers the requested refs, the repo is
+  scanned from cache and counted as cached; if there is no usable covering copy,
+  it lands in the unscanned bucket. The footer reports matched/scanned counts,
+  refreshed/cached counts, oldest fetched timestamp, and unscanned warnings.
+- Exit code `1` is promoted only by `--strict` with any unscanned repo or by
+  `--fail-on-match` with any matching repo. Ordinary no-match, match, or
+  non-strict unscanned sweeps exit `0` after reporting the footer.
+- `github.sweep_repo` records contain `full_name`, `clone_url`,
+  `refs_matched`, `hits`, `owners`, and `synced_at`. `github.sweep_match`
+  records contain `full_name`, `refs`, `path`, `line`, and `text`; one deduped
+  match can list multiple refs when the same blob is reachable from more than
+  one selected ref.
+- `cache status`, `cache clean`, and `cache worktree` are the lifecycle group.
+  `cache status` emits `github.corpus_repo` rows with profile, freshness, and
+  disk size. `cache clean` requires exactly one of `--repo`, `--all`, or
+  `--prune`; all destructive paths use `batch_apply` and prompt unless
+  `--yes`/`-y` is passed. `--prune` resolves live inventory for `--org` scopes
+  and removes cached repos that departed or are now archived. It rejects
+  `--team` because team membership is not recorded in corpus metadata, so
+  "departed from this team" is not locally decidable.
+  `cache worktree` materializes one cached repo/ref and emits `github.worktree`.
 
 ## Repository Inventory
 
@@ -419,10 +450,10 @@ Two efficiency/defense rules are load-bearing:
   `corpus.py`, and pure repo inventory pattern helpers in `repo_filters.py`.
   Query/filter helpers do no I/O.
 - `application/`: `WhoAmI`, `SearchRepos`, `SearchCode`, `SearchIssues`,
-  `SearchUsers`, `ListRepos`, `SyncCorpus`, `GrepCorpus`, `ListCorpus`,
-  `CleanCorpus`, `WorktreeCorpus`, and shared scope value objects. Scope
-  defaulting, team-to-repo resolution, repo-list enumeration, dedupe, ordering,
-  and corpus orchestration live here.
+  `SearchUsers`, `ListRepos`, `Sweep`, `StatusCorpus`, `CleanCorpus`,
+  `WorktreeCorpus`, and shared scope value objects. Scope defaulting,
+  team-to-repo resolution, repo-list enumeration, dedupe, ordering, sweep
+  orchestration, and corpus lifecycle orchestration live here.
 - `infrastructure/`: `GithubClient` (wired via the SDK's `connected_client`),
   `pagination.py` (GitHub search/list wrappers over the SDK's `paginate_link`),
   `graphql.py` (batched ref-probe query building and response parsing), and

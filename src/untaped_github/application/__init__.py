@@ -1,3 +1,4 @@
+from untaped_github.application.cache import CleanCorpus, StatusCorpus, WorktreeCorpus
 from untaped_github.application.inventory import (
     RepositoryInventoryItem,
     RepositoryInventoryScope,
@@ -12,15 +13,6 @@ from untaped_github.application.ports import (
     GithubTeamService,
 )
 from untaped_github.application.repos import ListRepos, RepoListFilters
-from untaped_github.application.scan import (
-    CleanCorpus,
-    GrepCorpus,
-    GrepOptions,
-    ListCorpus,
-    SyncCorpus,
-    SyncOptions,
-    WorktreeCorpus,
-)
 from untaped_github.application.scopes import TeamScope, normalize_team_scopes
 from untaped_github.application.search import (
     SearchCode,
@@ -28,6 +20,7 @@ from untaped_github.application.search import (
     SearchRepos,
     SearchUsers,
 )
+from untaped_github.application.sweep import Sweep, SweepMatch, SweepOptions, SweepReport
 from untaped_github.application.whoami import WhoAmI
 
 __all__ = [
@@ -38,9 +31,6 @@ __all__ = [
     "GithubRepositoryInventoryService",
     "GithubSearchService",
     "GithubTeamService",
-    "GrepCorpus",
-    "GrepOptions",
-    "ListCorpus",
     "ListRepos",
     "RepoListFilters",
     "RepositoryInventoryItem",
@@ -50,8 +40,11 @@ __all__ = [
     "SearchIssues",
     "SearchRepos",
     "SearchUsers",
-    "SyncCorpus",
-    "SyncOptions",
+    "StatusCorpus",
+    "Sweep",
+    "SweepMatch",
+    "SweepOptions",
+    "SweepReport",
     "TeamScope",
     "WhoAmI",
     "WorktreeCorpus",

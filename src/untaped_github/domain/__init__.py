@@ -1,4 +1,11 @@
-from untaped_github.domain.corpus import CorpusFailure, CorpusRepoTarget
+from untaped_github.domain.codeowners import CODEOWNERS_LOCATIONS, CodeownersRules, parse_codeowners
+from untaped_github.domain.corpus import (
+    CorpusFailure,
+    CorpusFreshness,
+    CorpusRepoTarget,
+    GrepHit,
+    covers,
+)
 from untaped_github.domain.models import (
     BatchRepoRefsFailure,
     BatchRepoRefsResult,
@@ -20,25 +27,47 @@ from untaped_github.domain.queries import (
     RepoSearchFilters,
     UserSearchFilters,
 )
+from untaped_github.domain.sweep import (
+    RefEvaluation,
+    RefProfile,
+    RefSelector,
+    RepoSweepOutcome,
+    SweepQuery,
+    profile_join,
+    ref_matches,
+)
 
 __all__ = [
+    "CODEOWNERS_LOCATIONS",
     "BatchRepoRefsFailure",
     "BatchRepoRefsResult",
     "CodeHitResult",
     "CodeResult",
     "CodeSearchFilters",
+    "CodeownersRules",
     "CorpusFailure",
+    "CorpusFreshness",
     "CorpusRepoResult",
     "CorpusRepoTarget",
     "GithubUser",
+    "GrepHit",
     "IssueResult",
     "IssueSearchFilters",
+    "RefEvaluation",
+    "RefProfile",
+    "RefSelector",
     "RepoListResult",
     "RepoRef",
     "RepoRefs",
     "RepoResult",
     "RepoSearchFilters",
+    "RepoSweepOutcome",
+    "SweepQuery",
     "UserResult",
     "UserSearchFilters",
     "WorktreeResult",
+    "covers",
+    "parse_codeowners",
+    "profile_join",
+    "ref_matches",
 ]

@@ -32,7 +32,7 @@
 **Exit codes:** `finish(promoted)` where `promoted = (--strict and unscanned bucket non-empty) or (--fail-on-match and any repo matched)`. Without promotion flags a sweep that ran exits 0, matches or not, gaps declared in the footer. Usage/config errors keep their normal paths.
 
 **Sweep CLI flag set** (exact):
-scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing `normalize_team_scopes`), `--stdin`, `--archived`; predicates `--grep`/`--not-grep`/`--path`/`--has-file`/`--lacks-file` (repeatable), `--any`; content modifiers `--ignore-case/-i`, `--fixed-strings/-F`, `--word-regexp/-w` (apply to all content predicates); refs `--refs default|branches|tags|all` (default `default`), `--ref GLOB` (repeatable); sync `--sync`, `--no-sync` (mutually exclusive); output `--show repos|matches` (default `repos`), `--no-owners`, `--fmt`, `--columns`; exit `--strict`, `--fail-on-match`; perf `--depth` (default 1), `--parallel/-j` (default from settings, clamp cap 32 via existing `clamp_parallel`).
+scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing `normalize_team_scopes`), `--stdin`, `--archived`; predicates `--grep`/`--not-grep`/`--path`/`--has-file`/`--lacks-file` (repeatable), `--any`; content modifiers `--ignore-case/-i`, `--fixed-strings/-F`, `--word-regexp/-w` (apply to all content predicates); refs `--refs default|branches|tags|all` (default `default`), `--ref GLOB` (repeatable); sync `--sync`, `--no-sync` (mutually exclusive); output `--show repos|matches` (default `repos`), `--no-owners`, `--format/-f`, `--columns/-c`; exit `--strict`, `--fail-on-match`; perf `--depth` (default 1), `--parallel/-j` (default from settings, clamp cap 32 via existing `clamp_parallel`).
 
 **Settings:** `GithubSettings` gains `sweep: SweepSettings` where `SweepSettings(BaseModel)` = `max_age_seconds: int = 3600`, `sync_concurrency: int = 12`. Config path: `github.sweep.max_age_seconds` etc. under the profile layout.
 
@@ -40,7 +40,7 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 
 **Combination semantics (Amendment 3):** negated predicates (`not-grep`, `lacks-file`) are always conjunctive. Positive predicates combine AND by default, OR under `--any`. Zero predicates → `ConfigError("sweep requires at least one predicate")`. `--path` with no content predicate → `ConfigError` suggesting `--has-file`.
 
-**Corpus metadata v2** (`untaped-corpus.json`): existing keys `repo, ref, clone_url, fetched_at` plus `profile: str` and `ref_globs: list[str]`. Absent new keys read as `profile="default", ref_globs=[]` (existing corpora stay valid — no migration). Widening lattice: `default < branches`, `default < tags`, `branches|tags < all`; effective fetch scope = stored ∪ requested (profiles joined upward, globs unioned). Never narrow.
+**Corpus metadata v2** (`untaped-corpus.json`): existing keys `repo, ref, clone_url, fetched_at` plus `profile: str`, `ref_globs: list[str]`, and `archived: bool`. Absent new keys read as `profile="default", ref_globs=[], archived=False` (existing corpora stay valid — no migration). Widening lattice: `default < branches`, `default < tags`, `branches|tags < all`; effective fetch scope = stored ∪ requested (profiles joined upward, globs unioned). Never narrow.
 
 **Freshness/fallback ruling:** a repo whose refresh fails but whose cached copy already covers the requested ref scope is scanned from cache (counted "cached" in the footer), not bucketed; a repo with no usable copy (or an insufficient profile it failed to widen) goes to the unscanned bucket with the reason. Footer always reports scanned/refreshed/cached counts, oldest `fetched_at` in scope, and the unscanned bucket.
 
@@ -91,10 +91,10 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 - Test: `tests/unit/test_git_corpus.py` (extend)
 
 **Interfaces (produces, on `GitCorpusCache`):**
-- `def sync_repo(self, repo: CorpusRepoTarget, *, root: Path, selector: RefSelector, depth: int, auth_header: str | None) -> CorpusRepoResult` — generalizes `sync_default_branch` (which it replaces): builds refspecs for the *effective* scope (stored metadata ∪ requested selector, per `profile_join`/glob union), fetches shallow, updates local refs, writes metadata v2. `default` profile refspec = the target's default branch (today's behavior); `branches` = `+refs/heads/*`; `tags` = `+refs/tags/*`; `all` = both; each glob adds matching head+tag refspecs.
-- `def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None` where `@dataclass(frozen=True) CorpusFreshness: fetched_at: datetime; profile: RefProfile; ref_globs: tuple[str, ...]` (None = not cached). Replaces `has_default_branch` for staleness decisions.
+- `def sync_repo(self, repo: CorpusRepoTarget, *, root: Path, selector: RefSelector, depth: int, auth_header: str | None) -> CorpusRepoResult` — generalizes default-branch sync and lands alongside `sync_default_branch` until Task 7 deletes the scan tree: builds refspecs for the *effective* scope (stored metadata ∪ requested selector, per `profile_join`/glob union), fetches shallow, updates local refs, writes metadata v2. `default` profile refspec = the target's default branch (today's behavior); `branches` = `+refs/heads/*`; `tags` = `+refs/tags/*`; `all` = both; each glob adds matching head+tag refspecs.
+- `def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None` where `@dataclass(frozen=True) CorpusFreshness: fetched_at: datetime; profile: RefProfile; ref_globs: tuple[str, ...]; archived: bool` (None = not cached). Used by sweep staleness decisions; `has_default_branch` remains for scan until Task 7.
 - `def covers(freshness: CorpusFreshness, selector: RefSelector) -> bool` (module-level, pure): stored scope already includes the requested one.
-- Metadata v1 files (no `profile` key) load as `profile="default", ref_globs=()`.
+- Metadata v1 files (no `profile`/`archived` keys) load as `profile="default", ref_globs=(), archived=False`.
 
 **Steps:**
 - [ ] Write failing tests on `file://` fixtures: v1 metadata reads as default profile (`test_v1_metadata_reads_as_default_profile`); widening default→branches fetches new branch refs and records the joined profile (`test_sync_widens_profile_and_keeps_union`); re-sync never narrows (`test_sync_with_narrower_request_keeps_stored_scope`); glob fetch brings matching branches and tags only (`test_ref_glob_fetches_matching_refs_only`); `covers` truth table (`test_covers_selector_containment`).
@@ -111,8 +111,8 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 - `def grep_ref(self, repo, *, root, ref: str, pattern: str, paths: tuple[str, ...], ignore_case: bool, fixed_strings: bool, word_regexp: bool) -> tuple[GrepHit, ...]` where `@dataclass(frozen=True) GrepHit: path: str; line: int; text: str; blob_oid: str`. Reuses today's `git grep` invocation shape (returncode 1 = no match = `()`, >1 = `GitCorpusError`); blob OID obtained per matched path for dedup.
 - `def tree_paths(self, repo, *, root, ref: str) -> tuple[str, ...]` — `ls-tree -r --name-only`; presence-glob matching happens in the application layer with `fnmatch`-style semantics.
 - `def read_blob(self, repo, *, root, ref: str, path: str) -> str | None` — CODEOWNERS reads; None when absent; non-UTF-8 decodes as errors="replace" (owners are best-effort, never fatal).
-- `def validate_pattern(self, *, root: Path, pattern: str, fixed_strings: bool) -> str | None` — exercises `git grep` against an empty scratch repo under `root`; returns the git error message for an invalid pattern, None when fine. (Mechanism is implementer's choice as long as invalid patterns are caught before any sync work, offline, with the message preserved.)
-- Delete `grep_default_branch` (superseded); `CodeHitResult` is retired with it in Task 7 when its last consumer (scan) goes.
+- `def validate_pattern(self, *, root: Path, pattern: str, paths: tuple[str, ...], fixed_strings: bool) -> str | None` — exercises `git grep` against an empty scratch repo under `root` with the supplied `--path` pathspecs attached; returns the git error message for an invalid regex or pathspec, None when fine. (Mechanism is implementer's choice as long as invalid content/pathspec inputs are caught before any sync work, offline, with the message preserved.)
+- Keep `grep_default_branch` and `CodeHitResult` until Task 7 deletes their last consumer (scan).
 
 **Steps:**
 - [ ] Write failing tests: multi-ref grep returns per-ref hits with blob OIDs and identical blobs share the OID across refs (`test_grep_hits_carry_blob_oid_shared_across_refs`); no-match ref returns empty, invalid pattern raises with git's message (`test_grep_no_match_vs_invalid_pattern`); `local_refs` ordering and glob filtering (`test_local_refs_default_first_then_sorted`); `tree_paths` lists nested files (`test_tree_paths_recursive`); `read_blob` present/absent (`test_read_blob_returns_none_for_missing_path`); `validate_pattern` catches a bad regex offline (`test_validate_pattern_flags_invalid_regex`).
@@ -121,7 +121,7 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 ### Task 5: Settings, port extension, and the Sweep use case
 
 **Files:**
-- Modify: `src/untaped_github/settings.py`, `src/untaped_github/application/ports.py` (`GitCorpus` protocol mirrors Tasks 3–4 surface, drops `sync_default_branch`/`has_default_branch`/`grep_default_branch`), `src/untaped_github/application/__init__.py`
+- Modify: `src/untaped_github/settings.py`, `src/untaped_github/application/ports.py` (`GitCorpus` protocol adds the Tasks 3–4 surface while retaining `sync_default_branch`/`has_default_branch`/`grep_default_branch` until Task 7), `src/untaped_github/application/__init__.py`
 - Create: `src/untaped_github/application/sweep.py`
 - Test: `tests/unit/test_sweep_use_case.py`, `tests/unit/test_settings.py` (extend if present, else assert via existing settings tests file)
 
@@ -132,7 +132,7 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 - `class Sweep:` constructed with the inventory use case, the corpus port, corpus root, and auth header supplier; `__call__(self, options: SweepOptions) -> SweepReport`.
 
 **Behavior contracts:**
-- Scope: `sync != "off"` → resolve via `ResolveRepositoryInventory` (stdin full names enter `scope.repos`), drop archived unless `include_archived`. `sync == "off"` → scope from corpus metadata (`--org` prefix match on `full_name`, explicit repos by name; teams raise `ConfigError("--team requires the API and cannot resolve offline")`); empty offline scope raises `ConfigError("corpus has no repos in scope; run without --no-sync to populate")`.
+- Scope: `sync != "off"` → resolve via `ResolveRepositoryInventory` (stdin full names enter `scope.repos`), drop archived unless `include_archived`, and record `archived` into corpus metadata at sync. `sync == "off"` → scope from corpus metadata (`--org` prefix match on `full_name`, explicit repos by name; teams raise `ConfigError("--team requires the API and cannot resolve offline")`), filtering archived rows unless `include_archived`; empty offline scope raises `ConfigError("corpus has no repos in scope; run without --no-sync to populate")`.
 - Sync plan: `force` refreshes every repo in scope; `auto` refreshes repos that are uncached, under-profiled (`not covers(...)`), or staler than `max_age_seconds`; concurrent via the existing `bounded_map` at `parallel`, with SDK progress.
 - Fallback ruling (pinned above): failed refresh + covering cache → scan cached, count as `cached`; failed refresh + no covering cache → `unscanned`.
 - Evaluate: per repo, per selected local ref → `RefEvaluation` from grep counts (with `--path` pathspecs) and tree presence checks; `ref_matches` decides; matches deduped by `blob_oid` across refs into `SweepMatch.refs`.
@@ -152,14 +152,14 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 
 **Behavior contracts:**
 - Exact flag set as pinned. Lazy imports per repo convention; scope requirement mirrors scan's: no `--org/--team/--repo/--stdin` → `ConfigError`.
-- Upfront validation order, all before any sync: query validation (domain `validate()` mapped to `ConfigError`), then every content pattern through `validate_pattern` — error message names the flag and value (e.g. `--grep 'foo['`: git's message).
+- Upfront validation order, all before any sync: query validation (domain `validate()` mapped to `ConfigError`), then every content pattern through `validate_pattern` with all `--path` values attached as pathspecs — error message names the offending flag and value (e.g. `--grep 'foo['`: git's message; bad pathspec: offending `--path` value). `--has-file`, `--lacks-file`, and `--ref` globs are evaluated in-process and have no upfront validation.
 - Rendering: `render_rows(..., kind="github.sweep_repo")` for `--show repos` (default), `kind="github.sweep_match"` for `--show matches`; record shapes exactly as pinned. Footer via `ui_context` messages: `Sweep: N matched of M scanned (R refreshed, C cached), oldest fetch <ts>` plus, when non-empty, a warning listing the unscanned bucket (repo + reason).
 - `--stdin` uses `read_identifiers(positional=[], stdin=True, id_field="full_name")`.
 - Exit: the pinned `finish(promoted)` contract.
 - `--parallel` default from `settings.sweep.sync_concurrency`, clamped (cap 32); `--depth` default 1.
 
 **Steps:**
-- [ ] Write failing CLI tests against `file://` fixture repos (the `test_scan_cli.py` pattern): repo-table happy path with per-predicate columns (`test_sweep_table_has_predicate_columns`); pipe shape for both kinds incl. envelope + id_field (`test_sweep_repo_pipe_record_shape`, `test_sweep_match_pipe_record_shape`); `refs_matched` column appears only beyond default (`test_refs_column_only_when_selector_beyond_default`); invalid regex fails fast naming the flag, before sync (`test_invalid_pattern_errors_before_sync`); `--path` without content predicate suggests `--has-file` (`test_path_without_content_suggests_has_file`); exit-code matrix: clean no-match = 0, `--fail-on-match` with a match = 1, unscanned default = 0, `--strict` + unscanned = 1 (`test_exit_code_matrix`); stdin scope (`test_stdin_full_names_enter_scope`); `--no-owners` drops the owners column (`test_no_owners_skips_enrichment`).
+- [ ] Write failing CLI tests against `file://` fixture repos (the `test_scan_cli.py` pattern): repo-table happy path with per-predicate columns (`test_sweep_table_has_predicate_columns`); pipe shape for both kinds incl. envelope + id_field (`test_sweep_repo_pipe_record_shape`, `test_sweep_match_pipe_record_shape`); `refs_matched` column appears only beyond default (`test_refs_column_only_when_selector_beyond_default`); invalid regex fails fast naming the flag, before sync (`test_invalid_pattern_errors_before_sync`); invalid `--path` pathspec fails fast before sync (`test_invalid_path_errors_before_sync`); `--path` without content predicate suggests `--has-file` (`test_path_without_content_suggests_has_file`); exit-code matrix: clean no-match = 0, `--fail-on-match` with a match = 1, unscanned default = 0, `--strict` + unscanned = 1 (`test_exit_code_matrix`); stdin scope (`test_stdin_full_names_enter_scope`); `--no-owners` drops the owners column (`test_no_owners_skips_enrichment`).
 - [ ] Implement; green; gate + commit (`feat: sweep CLI verb`).
 
 ### Task 7: The cache group; scan tree removed
@@ -201,7 +201,7 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 
 **Behavior contracts:**
 - AGENTS.md: scan sections replaced by sweep + cache (command surface, corpus policy incl. fetch profiles and the freshness/fallback ruling, new pipe kinds, exit-code contract).
-- SKILL.md (source artifact rule): sweep-first workflow — question-first examples from the spec, `--fail-on-match` CI gate, sweep→sweep and sweep→workspace pipe recipes, `cache status|clean|worktree`, freshness footer semantics.
+- SKILL.md (source artifact rule): sweep-first workflow — question-first examples from the spec, `--fail-on-match` CI gate, sweep→sweep pipe recipes, sweep→workspace raw URL recipe (`--format raw --columns clone_url` or `ssh_url`), `cache status|clean|worktree`, freshness footer semantics.
 - README: command table + examples updated; SDK-setup guidance keeps linking to `untaped/docs/plugins.md`, not duplicating it.
 
 **Steps:**
@@ -215,7 +215,7 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 **Steps:**
 - [ ] Bump version, `uv lock`, run the repo's release checks (version-consistency script if present).
 - [ ] Full gate: pre-commit run --all-files; `uv --cache-dir .uv-cache run mypy src tests`; full pytest with coverage; `uv build`.
-- [ ] Smoke: `uv --cache-dir .uv-cache run untaped-github sweep --help`, `... cache status --fmt table` against a scratch corpus, and one end-to-end sweep over a local `file://` fixture repo (match + `--fail-on-match` exit 1 observed).
+- [ ] Smoke: `uv --cache-dir .uv-cache run untaped-github sweep --help`, `... cache status --format table` against a scratch corpus, and one end-to-end sweep over a local `file://` fixture repo (match + `--fail-on-match` exit 1 observed).
 - [ ] Commit (`chore: release 0.14.0`); open the PR with the deviations/errata section.
 
 ## Self-review notes (writing-plans checklist)
@@ -223,3 +223,14 @@ scope `--org`/`--team`/`--repo` (repeatable; team = `org/team-slug` via existing
 - Spec coverage: every spec section maps to a task — verb/predicates/refs (1, 3–6), corpus policy (3–5), output/pipe/exit (6), command surface (6–8), CODEOWNERS (2, 5), ansible guard (8), docs/versioning (9–10). Amendments 1–5 are each pinned in "Pinned cross-task contracts".
 - Deliberate interpretations recorded here rather than silently: the freshness/fallback ruling; owners read from the default branch only; `--ref` globs union with the default branch; `validate_pattern` via scratch-repo git-grep. If reality contradicts any of these, STOP and escalate rather than improvise.
 - Type consistency: `RefSelector`/`SweepQuery`/`RefEvaluation`/`RepoSweepOutcome` names used identically in Tasks 1, 3–6; corpus surface names in Tasks 3–5 match the port update in Task 5.
+
+## Amendments (2026-07-06, plan-review)
+
+1. **`github.sweep_match` shape:** use `full_name` and `refs: list[str]`, not `repo` and singular `ref`. Blob-OID dedup means one displayed match may be reachable from multiple refs, and `full_name` lets `--stdin` chains accept either sweep kind by the same field.
+2. **Task sequencing:** Tasks 3–4 are additive. New corpus methods land alongside `sync_default_branch`, `has_default_branch`, and `grep_default_branch`; the legacy methods are deleted only in Task 7 when the scan tree is deleted. Full gates must pass after every task.
+3. **Output flag:** use SDK `--format/-f`, not `--fmt`.
+4. **Upfront validation scope:** validate every content pattern with all `--path` pathspecs via scratch-repo `git grep` before sync. `--has-file`, `--lacks-file`, and `--ref` globs are evaluated in-process, so every string is well-formed and there is no upfront validation.
+5. **Archived offline scope:** corpus metadata v2 includes `archived: bool`, recorded from live inventory during sync. Missing key in v1 metadata reads as `False`; offline `--no-sync` scope filtering excludes archived repos by default and includes them only with `--archived`.
+6. **Sweep-to-workspace pipeline:** typed `github.sweep_repo` pipe records do not feed `untaped-workspace add --stdin` today because that command calls `read_identifiers` without an `id_field`. Docs and examples must use generic raw URL lines: `untaped-github sweep ... --format raw --columns clone_url | untaped-workspace add --stdin ...`. Do not change `untaped-workspace` in this wave.
+7. **Content modifiers live on `SweepQuery`:** `SweepQuery` gains `ignore_case: bool = False`, `fixed_strings: bool = False`, and `word_regexp: bool = False`. These modifiers are match semantics, not orchestration knobs, so `SweepOptions` stays unchanged. They apply to all `grep_ref` calls for `greps` and `not_greps`; `validate_pattern` receives `query.fixed_strings`; `labels()` and `validate()` are unchanged because the modifiers are invocation-global.
+8. **`RepoSweepOutcome` carries `clone_url`:** `RepoSweepOutcome` gains `clone_url: str | None` immediately after `full_name`. It is populated from the resolved scope: inventory `clone_url` online, corpus metadata `clone_url` offline. The CLI emits it verbatim in pipe/json/raw records and does not add it as a default table column.

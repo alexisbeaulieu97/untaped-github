@@ -11,9 +11,10 @@ from untaped.api import (
 )
 
 from untaped_github.cli._client import open_client
+from untaped_github.cli.cache_commands import app as cache_app
 from untaped_github.cli.repos_commands import app as repos_app
-from untaped_github.cli.scan_commands import app as scan_app
 from untaped_github.cli.search_commands import app as search_app
+from untaped_github.cli.sweep_commands import sweep_command
 
 app = create_app(
     name="github",
@@ -37,5 +38,6 @@ def whoami_command(
 
 
 app.command(repos_app, name="repos")
-app.command(scan_app, name="scan")
+app.command(cache_app, name="cache")
 app.command(search_app, name="search")
+app.command(sweep_command, name="sweep")

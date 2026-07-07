@@ -9,9 +9,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from untaped_github.domain import (
-        CodeHitResult,
+        CorpusFreshness,
         CorpusRepoResult,
         CorpusRepoTarget,
+        GrepHit,
+        RefSelector,
         WorktreeResult,
     )
 
@@ -69,31 +71,60 @@ class GithubRepositoryInventoryService(GithubRepoListService, Protocol):
 
 
 class GitCorpus(Protocol):
-    """Local Git corpus operations used by scan commands."""
+    """Local Git corpus operations used by sweep and cache commands."""
 
-    def sync_default_branch(
+    def sync_repo(
         self,
         repo: CorpusRepoTarget,
         *,
         root: Path,
+        selector: RefSelector,
         depth: int,
         auth_header: str | None,
     ) -> CorpusRepoResult: ...
 
-    def has_default_branch(self, repo: CorpusRepoTarget, *, root: Path) -> bool: ...
+    def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None: ...
 
-    def grep_default_branch(
+    def local_refs(
         self,
         repo: CorpusRepoTarget,
         *,
         root: Path,
+        selector: RefSelector,
+    ) -> tuple[str, ...]: ...
+
+    def grep_ref(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str,
         pattern: str,
         paths: tuple[str, ...],
-        globs: tuple[str, ...],
         ignore_case: bool,
         fixed_strings: bool,
         word_regexp: bool,
-    ) -> tuple[CodeHitResult, ...]: ...
+    ) -> tuple[GrepHit, ...]: ...
+
+    def tree_paths(self, repo: CorpusRepoTarget, *, root: Path, ref: str) -> tuple[str, ...]: ...
+
+    def read_blob(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        root: Path,
+        ref: str,
+        path: str,
+    ) -> str | None: ...
+
+    def validate_pattern(
+        self,
+        *,
+        root: Path,
+        pattern: str,
+        paths: tuple[str, ...],
+        fixed_strings: bool,
+    ) -> str | None: ...
 
     def list_repos(self, *, root: Path) -> tuple[CorpusRepoResult, ...]: ...
 

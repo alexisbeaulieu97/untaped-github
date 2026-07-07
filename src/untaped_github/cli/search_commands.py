@@ -156,6 +156,9 @@ def code_command(
     Requires at least one scope qualifier on the GitHub side; this
     command injects ``user:@me`` if you pass none. GitHub no longer
     supports ``sort`` for code search — best-match is the only order.
+    Use ``sweep`` for exhaustive regex, path, negation, or multi-ref
+    queries; GitHub code search has no regex, caps at 1000 results, and
+    searches the default branch only.
     """
     from untaped_github.application import SearchCode  # noqa: PLC0415
     from untaped_github.domain import CodeSearchFilters  # noqa: PLC0415
