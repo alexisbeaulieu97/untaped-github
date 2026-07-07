@@ -651,7 +651,7 @@ def test_authenticated_run_failure_captures_and_redacts_stderr(
 
     assert "AUTHORIZATION: basic secret" not in str(excinfo.value)
     assert "fatal: <redacted> rejected" in str(excinfo.value)
-    assert captured["stdout"] is None
+    assert captured["stdout"] is subprocess.DEVNULL
 
 
 def test_authenticated_run_scrubs_trace_env_on_success(
@@ -668,7 +668,7 @@ def test_authenticated_run_scrubs_trace_env_on_success(
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         assert kwargs["stderr"] is subprocess.PIPE
-        assert kwargs["stdout"] is None
+        assert kwargs["stdout"] is subprocess.DEVNULL
         child_env.update(kwargs["env"])  # type: ignore[arg-type]
         return subprocess.CompletedProcess(args, 0, stderr=b"")
 
@@ -687,7 +687,7 @@ def test_authenticated_run_scrubs_trace_env_on_success(
     assert capsys.readouterr().err == ""
 
 
-def test_unauthenticated_run_keeps_existing_output_behavior(
+def test_unauthenticated_run_discards_stdout_and_pipes_stderr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -703,8 +703,8 @@ def test_unauthenticated_run_keeps_existing_output_behavior(
 
     assert result.returncode == 0
     assert captured["env"] is None
-    assert captured["stdout"] is None
-    assert captured["stderr"] is None
+    assert captured["stdout"] is subprocess.DEVNULL
+    assert captured["stderr"] is subprocess.PIPE
 
 
 def test_auth_config_rejects_non_https_remote() -> None:
@@ -720,3 +720,32 @@ def test_redact_removes_auth_header() -> None:
         )
         == "fatal: <redacted> rejected"
     )
+
+
+def test_first_sync_emits_no_git_chatter(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "hello\n"})
+    repo = _item("acme/api", source)
+    cache = GitCorpusCache()
+
+    _sync_default(cache, repo, root=tmp_path / "corpus")
+
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_materialize_worktree_emits_no_git_chatter(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "hello\n"})
+    repo = _item("acme/api", source)
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    _sync_default(cache, repo, root=root)
+    capfd.readouterr()
+
+    cache.materialize_worktree(repo, root=root, ref=None)
+
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
