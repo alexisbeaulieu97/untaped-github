@@ -351,6 +351,8 @@ class SweepSummary:
         )
         if any(value < 0 for value in values):
             raise ValueError("summary counts must be non-negative")
+        if (self.prepared == 0) != (self.oldest_fetched_at is None):
+            raise ValueError("oldest_fetched_at must be present exactly when prepared is positive")
 
     def to_dict(self) -> dict[str, object]:
         return {

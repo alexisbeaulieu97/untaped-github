@@ -283,7 +283,7 @@ def test_content_match_omits_absent_context() -> None:
             "prepared plus prepare failures",
         ),
         (
-            SweepSummary(1, 1, 0, 0, 0, 1, 0),
+            SweepSummary(1, 1, 0, 0, 0, 1, 0, datetime(2026, 7, 10, 14, tzinfo=UTC)),
             "scanned plus scan failures",
         ),
         (
@@ -291,7 +291,7 @@ def test_content_match_omits_absent_context() -> None:
             "unscanned must equal",
         ),
         (
-            SweepSummary(1, 1, 1, 0, 0, 0, 0),
+            SweepSummary(1, 1, 1, 0, 0, 0, 0, datetime(2026, 7, 10, 14, tzinfo=UTC)),
             "refreshed plus cached",
         ),
     ],
@@ -306,6 +306,30 @@ def test_report_rejects_summary_invariant_drift(
             results=(),
             failures=(),
             summary=summary,
+        )
+
+
+@pytest.mark.parametrize(
+    ("prepared", "oldest_fetched_at"),
+    [
+        (0, datetime(2026, 7, 10, 14, tzinfo=UTC)),
+        (1, None),
+    ],
+)
+def test_summary_requires_oldest_fetch_exactly_when_repositories_were_prepared(
+    prepared: int,
+    oldest_fetched_at: datetime | None,
+) -> None:
+    with pytest.raises(ValueError, match="oldest_fetched_at must be present exactly when prepared"):
+        SweepSummary(
+            selected=prepared,
+            prepared=prepared,
+            scanned=prepared,
+            matched=0,
+            unscanned=0,
+            refreshed=prepared,
+            cached=0,
+            oldest_fetched_at=oldest_fetched_at,
         )
 
 
