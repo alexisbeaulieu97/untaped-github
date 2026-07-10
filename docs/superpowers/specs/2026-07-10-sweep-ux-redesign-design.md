@@ -387,8 +387,9 @@ Ordering is part of the serialized contract:
   filters, and explicit ref globs preserve CLI order;
 - `results` and `failures` sort lexically by `full_name`;
 - canonical ref arrays and owner arrays sort lexically and are deduplicated;
-- matches sort by `kind`, `path`, `start_line`, `end_line`, then `content`;
-  path matches omit the inapplicable line and content keys from that sort; and
+- matches sort by (`kind`, `path`, `start_line`, `end_line`, `content`, sorted
+  canonical `refs` tuple); path matches omit the inapplicable line and content
+  keys but still use the canonical refs tuple as the final tie-breaker; and
 - context preserves repository source-line order.
 
 These rules make equivalent runs diffable without erasing the order in which

@@ -106,10 +106,11 @@ over a ref/path provenance mapping. Constraint witnesses do not affect owners.
 
 Requested scope lists, constraints, filters, and ref globs preserve CLI order.
 Results and failures sort by `full_name`; canonical refs and owners sort
-lexically; matches sort by kind, path, start line, end line, and content (with
-inapplicable fields omitted for path matches); context remains in source-line
-order. Stable ordering makes reports reproducible while preserving the user's
-stated query.
+lexically. Matches sort by kind, path, start line, end line, content, and the
+sorted canonical refs tuple; path matches omit the inapplicable line and
+content fields but still use refs as the final tie-breaker. Context remains in
+source-line order. Stable ordering makes reports reproducible while preserving
+the user's stated query.
 
 ## 6. Canonical refs survive selection, evaluation, grouping, and reporting
 
