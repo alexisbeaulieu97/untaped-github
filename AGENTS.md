@@ -32,10 +32,10 @@ machinery.
    with `login`; repo search and repo-list rows start with `full_name` and emit
    `github.repo`; issue search rows start with `repo` and emit `github.issue`;
    user search rows start with `id` and emit `github.user`; code search rows
-   start with `name` and emit `github.code`; sweep repo rows start with
-   `full_name` and emit `github.sweep_repo`; sweep match rows start with
-   `full_name` and emit `github.sweep_match`; corpus/worktree rows start with
-   `repo` and emit `github.corpus_repo` / `github.worktree`.
+   start with `name` and emit `github.code`; sweep results start with
+   `full_name` and emit complete `github.sweep_result` records;
+   corpus/worktree rows start with `repo` and emit `github.corpus_repo` /
+   `github.worktree`.
 4. **Secrets stay secret.** `GithubSettings.token` is a `SecretStr`; call
    `.get_secret_value()` only inside the HTTP adapter.
 5. **Build GitHub HTTP clients with `connected_client(...)`.** GitHub clients
@@ -121,9 +121,11 @@ or call site that consumes it.
 `github.corpus_path` defaults to `~/.untaped/github-corpus` and is owned by
 the `sweep` and `cache` command groups. It stores managed bare repositories
 and worktrees used for local sweeps; do not treat it as a human development
-workspace. `github.sweep.max_age_seconds` defaults to `3600`, and
+workspace. `github.sweep.fetch_depth` defaults to `1` (`0` requests full
+history), `github.sweep.max_age_seconds` defaults to `3600`, and
 `github.sweep.sync_concurrency` defaults to `12` before the existing SDK
-parallel clamp is applied.
+parallel clamp is applied. These non-negative/positive tuning values are
+configuration-only; they are deliberately absent from the sweep CLI.
 
 ## HTTP Wiring
 
@@ -241,48 +243,43 @@ see "GraphQL Batched Ref Probe" above for cost math.
 
 ## Sweep and Cache Corpus
 
-`sweep` is the primary local Git-corpus workflow. It is question-first:
-scope plus refs plus predicates produce either matching repository rows or
-deduped match rows. It is not a GitHub Search wrapper and must not call
-`/search/*`; online sweeps use REST inventory only to resolve scopes, then
-fetch and evaluate locally with `git`.
+`sweep content REGEX` and `sweep paths GLOB` are the primary local Git-corpus
+workflows. Each invocation has one evidence-producing primary matcher plus
+repeatable conjunctive `--with-content`, `--without-content`, `--with-path`,
+and `--without-path` constraints evaluated on the same canonical ref. It is
+not a GitHub Search wrapper and must not call `/search/*`; online sweeps use
+REST inventory only to resolve scopes, then fetch and evaluate locally.
 
-- `sweep` requires at least one scope (`--org`, `--team`, `--repo`, or
-  `--stdin`) and at least one predicate (`--grep`, `--not-grep`,
-  `--has-file`, or `--lacks-file`). `--path` only scopes content predicates;
-  by itself it is a usage error that should point users at `--has-file`.
-- Content predicates run through `git grep -I` so binary files are skipped.
-  `--ignore-case`/`-i`, `--fixed-strings`/`-F`, and `--word-regexp`/`-w`
-  apply to every content predicate in the query. Positive predicates combine
-  with AND by default, `--any` ORs positive predicates only, and negated
-  predicates always remain conjunctive. Predicate labels stay
-  `grep:<pattern>`, `not-grep:<pattern>`, `has-file:<glob>`, and
-  `lacks-file:<glob>`.
-- Up-front validation uses a scratch `git grep` call for each content pattern
-  with all `--path` pathspecs attached, so bad regexes and bad pathspecs fail
-  before any sync work. `--has-file`, `--lacks-file`, and `--ref` globs are
-  evaluated in-process and are not pre-validated.
+- Both targets require at least one additive scope: `--org`, `--team`,
+  `--repo`, or `--stdin`. Archived repositories are excluded unless
+  `--include-archived` is passed. `--cached` uses corpus metadata without
+  network access and rejects `--team` because team membership is not stored.
+- Content uses forced POSIX ERE by default; `--fixed-strings`,
+  `--ignore-case`, and `--word-regexp` apply to the primary and every content
+  constraint. Binary content is skipped. Repeatable `--include-path` and
+  `--exclude-path` filter all content evaluation, with exclusion winning.
+- Paths and content filters use case-sensitive gitignore-style patterns via
+  `pathspec`; public patterns are never passed to Git as pathspecs. Reject
+  actual newlines, unescaped leading `!`, comment-only patterns, and invalid
+  content regexes before refreshing the corpus.
 - Fetches are shallow and blobful by default; do not add
   `--filter=blob:none` because `git grep <ref>` needs blobs present locally.
   Fetch profiles are `default`, `branches`, `tags`, and `all`, with additional
   `--ref` globs unioned in. Corpus metadata records the fetched profile,
   ref globs, clone URL, and archived bit; profiles only widen and never
   narrow.
-- Online sweeps refresh uncached, stale, or under-profiled repos, with staleness
-  controlled by `github.sweep.max_age_seconds`. `--sync` forces a refresh;
-  `--no-sync` scans only what metadata says is available on disk. If refresh
-  fails but the cached copy already covers the requested refs, the repo is
-  scanned from cache and counted as cached; if there is no usable covering copy,
-  it lands in the unscanned bucket. The footer reports matched/scanned counts,
-  refreshed/cached counts, oldest fetched timestamp, and unscanned warnings.
-- Exit code `1` is promoted only by `--strict` with any unscanned repo or by
-  `--fail-on-match` with any matching repo. Ordinary no-match, match, or
-  non-strict unscanned sweeps exit `0` after reporting the footer.
-- `github.sweep_repo` records contain `full_name`, `clone_url`,
-  `refs_matched`, `hits`, `owners`, and `synced_at`. `github.sweep_match`
-  records contain `full_name`, `refs`, `path`, `line`, and `text`; one deduped
-  match can list multiple refs when the same blob is reachable from more than
-  one selected ref.
+- Online sweeps refresh uncached, stale, or under-profiled repos; `--refresh`
+  forces preparation and `--cached` makes no network calls. A failed refresh
+  may fall back to a covering cache; otherwise it is a declared `prepare`
+  failure. Scan errors are declared separately. Summary and failures always
+  go to stderr, including for raw and pipe output.
+- JSON/YAML serialize the self-contained `{query, results, failures, summary}`
+  report. Table is one row per primary match. Raw is one row per matching repo.
+  Pipe emits one complete `github.sweep_result` per repo and ignores columns.
+  Results and evidence retain fully-qualified refs such as `refs/heads/main`.
+- Ordinary no-match, match, and partial-report runs exit `0`.
+  `--fail-on-match` promotes matches to exit `1`; `--require-complete`
+  promotes any unscanned repository to exit `1`.
 - `cache status`, `cache clean`, and `cache worktree` are the lifecycle group.
   `cache status` emits `github.corpus_repo` rows with profile, freshness, and
   disk size. `cache clean` requires exactly one of `--repo`, `--all`, or

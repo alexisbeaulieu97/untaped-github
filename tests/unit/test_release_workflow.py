@@ -18,7 +18,7 @@ import yaml
 # The ONLY block that varies between tools.
 DIST_NAME = "untaped-github"
 CONSOLE_SCRIPT = "untaped-github"
-EXPECTED_VERSION = "0.14.1"
+EXPECTED_VERSION = "0.15.0"
 # Internal untaped-ecosystem deps, as (PEP 508 requirement, uv-source rev or None):
 #   rev = "vX.Y.Z" for a uv git source; None when the dep installs from PyPI.
 INTERNAL_DEPS: list[tuple[str, str | None]] = [

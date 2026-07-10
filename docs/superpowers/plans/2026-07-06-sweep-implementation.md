@@ -1,5 +1,11 @@
 # Sweep Redesign Implementation Plan (untaped-github 0.14.0)
 
+**Status:** Historical. Implemented by 0.14 and superseded for the public sweep
+contract by
+[`2026-07-10-sweep-ux-redesign-design.md`](../specs/2026-07-10-sweep-ux-redesign-design.md).
+Do not use the root sweep flags or split result kinds below as current usage
+guidance.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the mechanism-first `scan` tree with the question-first `sweep` verb plus a `cache` lifecycle group, per the approved spec `docs/superpowers/specs/2026-07-02-sweep-redesign-design.md` (including its 2026-07-06 Amendments 1–5).

@@ -5,6 +5,10 @@ settled; this page is the reference, not a discussion. For the SDK-wide
 decisions this tool inherits — the SDK-only direction, the
 `~/.untaped/config.yml` format, and the `--format pipe` envelope — see the core
 [`untaped` decisions](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/decisions.md).
+The exact current sweep command and report contract is recorded in the
+approved [sweep UX redesign spec](superpowers/specs/2026-07-10-sweep-ux-redesign-design.md);
+the July 2 spec and July 6 implementation plan describe the superseded 0.14
+surface and are retained only as historical implementation context.
 
 ## 1. `sweep` is question-first over a local corpus; the corpus is the engine, not GitHub Search
 

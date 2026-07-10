@@ -37,8 +37,8 @@ per-profile keys too (e.g. `untaped-github config set http.verify_ssl false`).
 ```text
 untaped-github whoami
 untaped-github repos list [PATTERN] [--org ORG]... [--team ORG/SLUG|SLUG]...
-untaped-github sweep --org ORG|--team ORG/SLUG|--repo OWNER/NAME --grep PATTERN
-untaped-github sweep --org ORG --has-file GLOB [--not-grep PATTERN] [--fail-on-match]
+untaped-github sweep content REGEX --org ORG|--team ORG/SLUG|--repo OWNER/NAME
+untaped-github sweep paths GLOB --org ORG [--without-content PATTERN] [--fail-on-match]
 untaped-github cache status|worktree ...
 untaped-github cache clean --repo OWNER/NAME|--all|--prune [--yes|-y]
 untaped-github search repos [QUERY]
@@ -51,9 +51,9 @@ untaped-github config|profile|skills ...
 Examples:
 
 ```bash
-untaped-github sweep --org acme --grep 'old_api' --not-grep 'new_api'
-untaped-github sweep --team acme/platform --grep 'log4j' --fail-on-match
-untaped-github sweep --org acme --grep 'old_api' \
+untaped-github sweep content old_api --org acme --without-content new_api
+untaped-github sweep content log4j --team acme/platform --fail-on-match
+untaped-github sweep content old_api --org acme \
   --format raw --columns clone_url \
   | untaped-workspace add --stdin --workspace remediation
 untaped-github cache status --format table
