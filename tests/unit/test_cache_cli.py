@@ -82,7 +82,7 @@ def _populate_cache(tmp_path: Path, repos: list[dict[str, object]]) -> None:
         mock.get("/orgs/acme/repos").mock(return_value=httpx.Response(200, json=repos))
         result = CliInvoker().invoke(
             app,
-            ["sweep", "--org", "acme", "--has-file", "README.md", "--format", "json"],
+            ["sweep", "paths", "README.md", "--org", "acme", "--format", "json"],
         )
     assert result.exit_code == 0, result.output
 
