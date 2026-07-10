@@ -26,6 +26,7 @@ from untaped_github.domain import (
     PathMatch,
     PathQuestion,
     RefSelector,
+    SweepFailure,
     SweepQuery,
     SweepScope,
 )
@@ -130,10 +131,12 @@ class _Corpus:
         *,
         cached_rows: tuple[CorpusRepoResult, ...] = (),
         freshness: dict[str, CorpusFreshness] | None = None,
+        freshness_failures: dict[str, str] | None = None,
         sync_failures: dict[str, str] | None = None,
     ) -> None:
         self.cached_rows = cached_rows
         self.freshness = freshness or {}
+        self.freshness_failures = freshness_failures or {}
         self.sync_failures = sync_failures or {}
         self.validation_errors: dict[str, str] = {}
         self.synced: list[_SyncCall] = []
@@ -172,6 +175,9 @@ class _Corpus:
         )
 
     def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None:
+        reason = self.freshness_failures.get(repo.full_name)
+        if reason is not None:
+            raise GitCorpusError(reason)
         return self.freshness.get(repo.full_name)
 
     def local_refs(
@@ -382,6 +388,28 @@ def test_content_grouping_keeps_distinct_content_and_canonical_ref_collisions(
     )
 
 
+def test_content_grouping_keeps_identical_visible_hits_separate_when_blob_oids_differ(
+    tmp_path: Path,
+) -> None:
+    corpus = _Corpus()
+    corpus.local_ref_map["acme/api"] = (BRANCH, TAG)
+    corpus.grep_map[("acme/api", BRANCH, "needle")] = (
+        _hit("app.py", line=3, text="same", oid="branch-oid"),
+    )
+    corpus.grep_map[("acme/api", TAG, "needle")] = (
+        _hit("app.py", line=3, text="same", oid="tag-oid"),
+    )
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(ContentQuestion(pattern="needle"), refs=RefSelector(profile="all")))
+    )
+
+    assert report.results[0].matches == (
+        ContentMatch(refs=(BRANCH,), path="app.py", start_line=3, end_line=3, content="same"),
+        ContentMatch(refs=(TAG,), path="app.py", start_line=3, end_line=3, content="same"),
+    )
+
+
 def test_path_evidence_groups_only_by_path_across_canonical_refs(tmp_path: Path) -> None:
     corpus = _Corpus()
     corpus.local_ref_map["acme/api"] = (BRANCH, TAG)
@@ -530,6 +558,53 @@ def test_prepare_scan_failures_cache_fallback_and_summary_invariants(tmp_path: P
         "cached": 1,
         "oldest_fetched_at": stale.isoformat(),
     }
+
+
+def test_freshness_failure_is_isolated_as_a_prepare_failure(tmp_path: Path) -> None:
+    corpus = _Corpus(freshness_failures={"acme/broken": "metadata unreadable"})
+    corpus.tree_map[("acme/good", MAIN)] = ("README.md",)
+    resolver = _Resolver((_item("acme/broken"), _item("acme/good")))
+
+    report = _sweep(corpus, resolver, tmp_path / "corpus")(
+        _options(
+            _query(
+                PathQuestion(pattern="README.md"),
+                scope=SweepScope(orgs=("acme",)),
+            )
+        )
+    )
+
+    assert [result.full_name for result in report.results] == ["acme/good"]
+    assert report.failures == (
+        SweepFailure(full_name="acme/broken", stage="prepare", reason="metadata unreadable"),
+    )
+    assert report.summary.to_dict() == {
+        "selected": 2,
+        "prepared": 1,
+        "scanned": 1,
+        "matched": 1,
+        "unscanned": 1,
+        "refreshed": 1,
+        "cached": 0,
+        "oldest_fetched_at": FETCHED_AT.isoformat(),
+    }
+
+
+def test_auth_header_failures_remain_global(tmp_path: Path) -> None:
+    corpus = _Corpus()
+
+    def failing_auth_header() -> str | None:
+        raise GitCorpusError("authentication unavailable")
+
+    sweep = Sweep(
+        inventory=_Resolver((_item("acme/api"),)),
+        corpus=corpus,
+        root=tmp_path / "corpus",
+        auth_header=failing_auth_header,
+    )
+
+    with pytest.raises(GitCorpusError, match="authentication unavailable"):
+        sweep(_options(_query(PathQuestion(pattern="README.md"))))
 
 
 def test_cached_scope_requires_covering_metadata_without_network_calls(tmp_path: Path) -> None:

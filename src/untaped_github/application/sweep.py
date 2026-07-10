@@ -233,7 +233,14 @@ class Sweep:
         failures: list[SweepFailure] = []
 
         def prepare_one(repo: CorpusRepoTarget) -> _ReadyRepo | SweepFailure:
-            freshness = self._corpus.repo_freshness(repo, root=self._root)
+            try:
+                freshness = self._corpus.repo_freshness(repo, root=self._root)
+            except GitCorpusError as exc:
+                return SweepFailure(
+                    full_name=repo.full_name,
+                    stage="prepare",
+                    reason=str(exc),
+                )
             if options.query.freshness == "cached":
                 if freshness is None or not covers(freshness, options.query.refs):
                     return SweepFailure(
@@ -252,13 +259,14 @@ class Sweep:
                 if freshness is None:  # pragma: no cover - guarded by _needs_refresh
                     raise AssertionError("fresh corpus metadata is required")
                 return _ReadyRepo(repo=repo, fetched_at=freshness.fetched_at, refreshed=False)
+            auth_header = self._auth_header()
             try:
                 result = self._corpus.sync_repo(
                     repo,
                     root=self._root,
                     selector=options.query.refs,
                     depth=options.fetch_depth,
-                    auth_header=self._auth_header(),
+                    auth_header=auth_header,
                 )
             except GitCorpusError as exc:
                 if freshness is not None and covers(freshness, options.query.refs):
