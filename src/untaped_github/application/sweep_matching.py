@@ -72,13 +72,15 @@ def compile_sweep_matchers(
     fixed_strings = query.content_options.mode == "fixed_strings"
     content_patterns: list[tuple[str, str]] = []
     if isinstance(query.question, ContentQuestion):
-        content_patterns.append(("REGEX", query.question.pattern))
+        content_patterns.append(("content REGEX", query.question.pattern))
     content_patterns.extend(
         (f"--{constraint.kind.replace('_', '-')}", constraint.pattern)
         for constraint in query.constraints
         if isinstance(constraint, ContentConstraint)
     )
     for option, pattern in content_patterns:
+        if "\n" in pattern or "\r" in pattern:
+            raise ConfigError(f"{option} {pattern!r}: content pattern contains an actual newline")
         error = corpus.validate_pattern(
             root=root,
             pattern=pattern,

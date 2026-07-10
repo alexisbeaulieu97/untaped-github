@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -83,7 +84,7 @@ def test_compile_reports_content_option_and_pattern(tmp_path: Path) -> None:
         question=ContentQuestion(pattern="["),
     )
 
-    with pytest.raises(ConfigError, match=r"REGEX '\[': invalid regular expression"):
+    with pytest.raises(ConfigError, match=r"content REGEX '\[': invalid regular expression"):
         compile_sweep_matchers(
             query,
             corpus=_Corpus({"[": "invalid regular expression"}),
@@ -117,3 +118,46 @@ def test_fixed_string_mode_reaches_every_content_validation(tmp_path: Path) -> N
     compile_sweep_matchers(query, corpus=corpus, root=tmp_path / "corpus")
 
     assert corpus.validated == [("[literal", True)]
+
+
+@pytest.mark.parametrize("mode", ["extended_regex", "fixed_strings"])
+@pytest.mark.parametrize("pattern", ["first\nsecond", "first\rsecond"])
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    [
+        ("content REGEX", "question"),
+        ("--with-content", "with_content"),
+        ("--without-content", "without_content"),
+    ],
+)
+def test_compile_rejects_actual_newlines_before_corpus_validation(
+    tmp_path: Path,
+    mode: str,
+    pattern: str,
+    source: str,
+    kind: str,
+) -> None:
+    if kind == "question":
+        question = ContentQuestion(pattern="safe")
+        object.__setattr__(question, "pattern", pattern)
+        constraints: tuple[ContentConstraint, ...] = ()
+    else:
+        question = PathQuestion(pattern="README.md")
+        constraint = ContentConstraint(kind=kind, pattern="safe")  # type: ignore[arg-type]
+        object.__setattr__(constraint, "pattern", pattern)
+        constraints = (constraint,)
+    query = SweepQuery(
+        scope=SweepScope(orgs=("acme",)),
+        question=question,
+        constraints=constraints,
+        content_options=ContentOptions(mode=mode),  # type: ignore[arg-type]
+    )
+    corpus = _Corpus()
+
+    with pytest.raises(
+        ConfigError,
+        match=rf"{re.escape(source)} {re.escape(repr(pattern))}:.*actual newline",
+    ):
+        compile_sweep_matchers(query, corpus=corpus, root=tmp_path / "corpus")
+
+    assert corpus.validated == []
