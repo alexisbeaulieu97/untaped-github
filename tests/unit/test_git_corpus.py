@@ -8,12 +8,16 @@ from pathlib import Path
 
 import pytest
 
+from untaped_github.application.sweep import Sweep, SweepOptions
 from untaped_github.domain import (
     CorpusFreshness,
     CorpusRepoResult,
     CorpusRepoTarget,
     GrepHit,
+    PathQuestion,
     RefSelector,
+    SweepQuery,
+    SweepScope,
     covers,
 )
 from untaped_github.domain.errors import GitCorpusError
@@ -174,6 +178,43 @@ def test_sync_with_narrower_request_keeps_stored_scope(tmp_path: Path) -> None:
 
     assert narrowed.profile == "branches"
     assert _has_ref(Path(narrowed.path), "refs/heads/release/1")
+
+
+def test_first_tags_sync_also_caches_canonical_default_ref(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "canonical default\n"})
+    _git(source, "tag", "v1.0")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+
+    synced = cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="tags"),
+        depth=1,
+        auth_header=None,
+    )
+
+    assert _has_ref(Path(synced.path), "refs/heads/main")
+    report = Sweep(
+        inventory=lambda _scope: (),
+        corpus=cache,
+        root=root,
+        auth_header=lambda: None,
+    )(
+        SweepOptions(
+            query=SweepQuery(
+                scope=SweepScope(repos=("acme/api",)),
+                question=PathQuestion(pattern="README.md"),
+                freshness="cached",
+            ),
+            sync_concurrency=1,
+        )
+    )
+
+    assert report.failures == ()
+    assert report.results[0].refs_matched == ("refs/heads/main",)
+    assert report.results[0].matches[0].path == "README.md"
 
 
 def test_ref_glob_fetches_matching_refs_only(tmp_path: Path) -> None:
@@ -367,6 +408,39 @@ def test_local_refs_preserve_same_named_branch_and_tag(tmp_path: Path) -> None:
     )
 
 
+def test_local_refs_rejects_metadata_without_bare_head(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    synced = cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+    Path(synced.path, "HEAD").unlink()
+
+    with pytest.raises(GitCorpusError, match="repository is not in the local corpus"):
+        cache.local_refs(repo, root=root, selector=RefSelector())
+
+    report = Sweep(
+        inventory=lambda _scope: (),
+        corpus=cache,
+        root=root,
+        auth_header=lambda: None,
+    )(
+        SweepOptions(
+            query=SweepQuery(
+                scope=SweepScope(repos=("acme/api",)),
+                question=PathQuestion(pattern="README.md"),
+                freshness="cached",
+            ),
+            sync_concurrency=1,
+        )
+    )
+    assert report.results == ()
+    assert [(failure.stage, failure.reason) for failure in report.failures] == [
+        ("scan", "repository is not in the local corpus")
+    ]
+    assert report.summary.unscanned == 1
+
+
 def test_tree_paths_recursive(tmp_path: Path) -> None:
     source = _source_repo(
         tmp_path,
@@ -396,6 +470,27 @@ def test_read_blob_returns_none_for_missing_path(tmp_path: Path) -> None:
 
     assert cache.read_blob(repo, root=root, ref="main", path="README.md") == "hello\n"
     assert cache.read_blob(repo, root=root, ref="main", path="missing.txt") is None
+
+
+def test_read_blob_raises_when_git_show_fails_for_existing_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "hello\n"})
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(repo, root=root, selector=RefSelector(), depth=1, auth_header=None)
+    real_run = cache._run
+
+    def failing_show(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if args[:1] == ["show"]:
+            return subprocess.CompletedProcess(args, 128, stderr=b"fatal: disk read failed\n")
+        return real_run(args, **kwargs)  # type: ignore[arg-type,return-value]
+
+    monkeypatch.setattr(cache, "_run", failing_show)
+
+    with pytest.raises(GitCorpusError, match="disk read failed"):
+        cache.read_blob(repo, root=root, ref="main", path="README.md")
 
 
 def test_validate_pattern_flags_invalid_regex(tmp_path: Path) -> None:

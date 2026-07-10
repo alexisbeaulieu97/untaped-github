@@ -236,6 +236,58 @@ def test_stdin_repositories_are_deduplicated(
     assert captured[-1].stdin_repos == ("acme/api", "acme/web")  # type: ignore[attr-defined]
 
 
+def test_pipe_output_round_trips_through_second_sweep_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNTAPED_CONFIG", str(_write_config(tmp_path)))
+    captured = _capture_sweep(monkeypatch, matching=True)
+
+    first = CliInvoker().invoke(
+        app,
+        [
+            "sweep",
+            "paths",
+            "README.md",
+            "--repo",
+            "acme/api",
+            "--cached",
+            "--format",
+            "pipe",
+        ],
+    )
+    second = CliInvoker().invoke(
+        app,
+        ["sweep", "paths", "README.md", "--stdin", "--cached", "--format", "pipe"],
+        input=first.stdout + first.stdout,
+    )
+
+    assert first.exit_code == second.exit_code == 0
+    assert captured[-1].stdin_repos == ("acme/api",)  # type: ignore[attr-defined]
+    envelope = json.loads(second.stdout)
+    assert envelope == {
+        "untaped": "1",
+        "kind": "github.sweep_result",
+        "record": {
+            "full_name": "acme/api",
+            "clone_url": "https://github.com/acme/api.git",
+            "refs_matched": ["refs/heads/main"],
+            "matches": [{"kind": "path", "refs": ["refs/heads/main"], "path": "README.md"}],
+            "owners": [],
+            "synced_at": "2026-07-10T12:00:00+00:00",
+        },
+    }
+    assert (
+        first.stderr
+        == second.stderr
+        == (
+            "Sweep: 1 matched of 1 scanned; 0 unscanned; 0 refreshed, 1 cached; "
+            "oldest fetch 2026-07-10T12:00:00+00:00\n"
+        )
+    )
+    assert "Sweep:" not in first.stdout
+    assert "github.sweep_result" not in first.stderr
+
+
 def test_fail_on_match_promotes_exit_after_rendering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

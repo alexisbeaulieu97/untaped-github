@@ -22,6 +22,7 @@ from untaped_github.domain import (
     ContentMatch,
     ContentQuestion,
     CorpusFreshness,
+    CorpusRepoResult,
     CorpusRepoTarget,
     GrepHit,
     MatchContext,
@@ -200,29 +201,29 @@ class Sweep:
                 "--team requires the API and cannot resolve from cached corpus metadata"
             )
         names = set((*scope.repos, *options.stdin_repos))
-        targets: list[CorpusRepoTarget] = []
         rows = self._corpus.list_repos(root=self._root)
-        known_names = {row.repo for row in rows}
+        rows_by_name: dict[str, CorpusRepoResult] = {}
         for row in rows:
+            current = rows_by_name.get(row.repo)
+            if current is None or _metadata_row_key(row) > _metadata_row_key(current):
+                rows_by_name[row.repo] = row
+        targets_by_name: dict[str, CorpusRepoTarget] = {}
+        for row in rows_by_name.values():
             if not scope.include_archived and row.archived:
                 continue
             selected_by_org = any(row.repo.startswith(f"{org}/") for org in scope.orgs)
             if (scope.orgs or names) and not (selected_by_org or row.repo in names):
                 continue
-            targets.append(
-                CorpusRepoTarget(
-                    full_name=row.repo,
-                    default_branch=row.ref,
-                    clone_url=row.clone_url,
-                    archived=row.archived,
-                )
+            targets_by_name[row.repo] = CorpusRepoTarget(
+                full_name=row.repo,
+                default_branch=row.ref,
+                clone_url=row.clone_url,
+                archived=row.archived,
             )
-        targets.extend(
-            CorpusRepoTarget(full_name=name, default_branch=None)
-            for name in dict.fromkeys((*scope.repos, *options.stdin_repos))
-            if name not in known_names
-        )
-        return tuple(sorted(targets, key=lambda repo: repo.full_name))
+        for name in dict.fromkeys((*scope.repos, *options.stdin_repos)):
+            if name not in rows_by_name:
+                targets_by_name[name] = CorpusRepoTarget(full_name=name, default_branch=None)
+        return tuple(sorted(targets_by_name.values(), key=lambda repo: repo.full_name))
 
     def _prepare_repos(
         self,
@@ -472,15 +473,12 @@ class Sweep:
     ) -> tuple[str, ...]:
         rules = None
         for codeowners_path in CODEOWNERS_LOCATIONS:
-            try:
-                text = self._corpus.read_blob(
-                    repo,
-                    root=self._root,
-                    ref=ref,
-                    path=codeowners_path,
-                )
-            except GitCorpusError:
-                return ()
+            text = self._corpus.read_blob(
+                repo,
+                root=self._root,
+                ref=ref,
+                path=codeowners_path,
+            )
             if text is None:
                 continue
             try:
@@ -521,6 +519,19 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _metadata_row_key(row: CorpusRepoResult) -> tuple[bool, float, str, str, str]:
+    fetched_at = _parse_datetime(row.fetched_at)
+    if fetched_at is not None and fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=UTC)
+    return (
+        fetched_at is not None,
+        fetched_at.timestamp() if fetched_at is not None else float("-inf"),
+        row.path,
+        row.ref,
+        row.clone_url or "",
+    )
 
 
 def _match_context(blob: str, *, line: int, radius: int) -> MatchContext:

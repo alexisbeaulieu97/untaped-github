@@ -148,7 +148,7 @@ class GitCorpusCache:
         branch = _default_branch(repo)
         bare = cache_path_for(_remote_url(repo), cache_dir=root)
         if not (bare / "HEAD").is_file():
-            return ()
+            raise GitCorpusError("repository is not in the local corpus")
         result = cast(
             subprocess.CompletedProcess[str],
             self._run(
@@ -232,9 +232,21 @@ class GitCorpusCache:
             subprocess.CompletedProcess[bytes],
             self._run(["show", f"{ref}:{path}"], cwd=bare, capture_bytes=True, check=False),
         )
-        if result.returncode != 0:
+        if result.returncode == 0:
+            return (result.stdout or b"").decode(errors="replace")
+        entry = cast(
+            subprocess.CompletedProcess[bytes],
+            self._run(
+                ["ls-tree", "-z", ref, "--", path],
+                cwd=bare,
+                capture_bytes=True,
+                check=False,
+            ),
+        )
+        if entry.returncode == 0 and not entry.stdout:
             return None
-        return (result.stdout or b"").decode(errors="replace")
+        stderr = _stderr_text(result) or _stderr_text(entry)
+        raise GitCorpusError(stderr or f"git show failed with status {result.returncode}")
 
     def validate_pattern(
         self,
@@ -580,7 +592,10 @@ def _profile_refspecs(profile: RefProfile, branch: str) -> tuple[str, ...]:
     if profile == "branches":
         return ("+refs/heads/*:refs/heads/*",)
     if profile == "tags":
-        return ("+refs/tags/*:refs/tags/*",)
+        return (
+            f"+refs/heads/{branch}:refs/heads/{branch}",
+            "+refs/tags/*:refs/tags/*",
+        )
     return ("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
 
 

@@ -55,13 +55,16 @@ def _row(
     archived: bool = False,
     profile: str = "default",
     ref_globs: tuple[str, ...] = (),
+    ref: str = "main",
+    clone_url: str | None = None,
+    fetched_at: str | None = None,
 ) -> CorpusRepoResult:
     return CorpusRepoResult(
         repo=full_name,
-        ref="main",
+        ref=ref,
         path=f"/corpus/{full_name}",
-        clone_url=f"https://github.example.com/{full_name}.git",
-        fetched_at=FETCHED_AT.isoformat(),
+        clone_url=clone_url or f"https://github.example.com/{full_name}.git",
+        fetched_at=fetched_at or FETCHED_AT.isoformat(),
         profile=profile,
         ref_globs=ref_globs,
         archived=archived,
@@ -145,6 +148,7 @@ class _Corpus:
         self.tree_map: dict[tuple[str, str], tuple[str, ...]] = {}
         self.grep_map: dict[tuple[str, str, str], tuple[GrepHit, ...]] = {}
         self.blob_map: dict[tuple[str, str, str], str | None] = {}
+        self.blob_failures: dict[tuple[str, str, str], str] = {}
         self.grep_calls: list[tuple[str, str, str, bool, bool, bool]] = []
         self.read_calls: list[tuple[str, str, str]] = []
 
@@ -220,6 +224,9 @@ class _Corpus:
         path: str,
     ) -> str | None:
         self.read_calls.append((repo.full_name, ref, path))
+        reason = self.blob_failures.get((repo.full_name, ref, path))
+        if reason is not None:
+            raise GitCorpusError(reason)
         return self.blob_map.get((repo.full_name, ref, path))
 
     def validate_pattern(
@@ -513,6 +520,31 @@ def test_codeowners_are_resolved_per_qualifying_ref_from_primary_paths_only(
     assert ("acme/api", TAG, ".github/CODEOWNERS") in corpus.read_calls
 
 
+def test_missing_codeowners_is_not_a_scan_failure(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.tree_map[("acme/api", MAIN)] = ("README.md",)
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(PathQuestion(pattern="README.md")))
+    )
+
+    assert report.results[0].owners == ()
+    assert report.failures == ()
+
+
+def test_operational_codeowners_read_failure_is_a_scan_failure(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.tree_map[("acme/api", MAIN)] = ("README.md",)
+    corpus.blob_failures[("acme/api", MAIN, ".github/CODEOWNERS")] = "git show failed"
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(PathQuestion(pattern="README.md")))
+    )
+
+    assert report.results == ()
+    assert report.failures == (SweepFailure("acme/api", "scan", "git show failed"),)
+
+
 def test_prepare_scan_failures_cache_fallback_and_summary_invariants(tmp_path: Path) -> None:
     stale = FETCHED_AT - timedelta(hours=2)
     corpus = _Corpus(
@@ -669,6 +701,47 @@ def test_cached_scope_is_additive_and_missing_explicit_repos_are_prepare_failure
         ("other/missing", "prepare")
     ]
     assert report.summary.selected == 3
+
+
+def test_cached_scope_dedupes_metadata_and_prefers_newest_valid_row(tmp_path: Path) -> None:
+    older = (FETCHED_AT - timedelta(hours=1)).isoformat()
+    newer = FETCHED_AT.isoformat()
+    corpus = _Corpus(
+        cached_rows=(
+            _row(
+                "acme/api",
+                ref="old",
+                clone_url="https://github.example.com/acme/old.git",
+                fetched_at=older,
+            ),
+            _row(
+                "acme/api",
+                ref="main",
+                clone_url="https://github.example.com/acme/new.git",
+                fetched_at=newer,
+            ),
+            _row("acme/api", ref="invalid", fetched_at="not-a-timestamp"),
+        ),
+        freshness={"acme/api": CorpusFreshness(fetched_at=FETCHED_AT, profile="default")},
+    )
+    corpus.tree_map[("acme/api", MAIN)] = ("README.md",)
+
+    report = _sweep(corpus, _Resolver(()), tmp_path / "corpus")(
+        _options(
+            _query(
+                PathQuestion(pattern="README.md"),
+                scope=SweepScope(orgs=("acme",), repos=("acme/api", "acme/missing")),
+                freshness="cached",
+            )
+        )
+    )
+
+    assert [result.full_name for result in report.results] == ["acme/api"]
+    assert report.results[0].clone_url == "https://github.example.com/acme/new.git"
+    assert report.failures == (
+        SweepFailure("acme/missing", "prepare", "cached corpus does not cover the selected refs"),
+    )
+    assert report.summary.selected == 2
 
 
 def test_cached_team_scope_is_rejected(tmp_path: Path) -> None:
