@@ -1,7 +1,9 @@
 # untaped-github sweep redesign — design spec
 
 **Date:** 2026-07-02
-**Status:** Approved design, awaiting implementation slot (see Sequencing)
+**Status:** Superseded by
+[`2026-07-10-sweep-ux-redesign-design.md`](2026-07-10-sweep-ux-redesign-design.md).
+Retained as historical context for the first sweep implementation.
 **Scope:** untaped-github only. No SDK changes. No untaped-ansible changes.
 
 ## Problem

@@ -477,6 +477,8 @@ Two efficiency/defense rules are load-bearing:
 
 ## See Also
 
+- **Decisions (ADRs):** [`docs/decisions.md`](docs/decisions.md) - the WHY
+  behind the question-first `sweep`/corpus design and other tool-specific rulings.
 - [`untaped` SDK](https://github.com/alexisbeaulieu97/untaped) - CLI
   launcher, settings registry, config-file helpers, output helpers.
 - [`untaped` configuration docs](https://github.com/alexisbeaulieu97/untaped/blob/main/docs/configuration.md)
