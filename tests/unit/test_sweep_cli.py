@@ -30,7 +30,7 @@ def _reset_settings_cache() -> Iterator[None]:
     get_settings.cache_clear()
 
 
-def _write_config(tmp_path: Path) -> Path:
+def _write_config(tmp_path: Path, *, sync_concurrency: int = 3) -> Path:
     config = tmp_path / "config.yml"
     config.write_text(
         "profiles:\n"
@@ -39,7 +39,7 @@ def _write_config(tmp_path: Path) -> Path:
         f"      corpus_path: {tmp_path / 'corpus'}\n"
         "      sweep:\n"
         "        fetch_depth: 7\n"
-        "        sync_concurrency: 3\n"
+        f"        sync_concurrency: {sync_concurrency}\n"
         "        max_age_seconds: 99\n"
     )
     return config
@@ -289,3 +289,23 @@ def test_require_complete_promotes_partial_report_after_rendering(
     assert json.loads(result.stdout)["failures"][0]["stage"] == "prepare"
     assert "warning: unscanned acme/api (prepare): fetch failed" in result.stderr
     assert "Sweep: 0 matched of 0 scanned; 1 unscanned" in result.stderr
+
+
+def test_configured_concurrency_clamp_uses_config_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "UNTAPED_CONFIG",
+        str(_write_config(tmp_path, sync_concurrency=99)),
+    )
+    captured = _capture_sweep(monkeypatch)
+
+    result = CliInvoker().invoke(
+        app,
+        ["sweep", "paths", "README.md", "--repo", "acme/api", "--cached"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured[-1].sync_concurrency == 32  # type: ignore[attr-defined]
+    assert "github.sweep.sync_concurrency 99 clamped to 32" in result.stderr
+    assert "--parallel" not in result.stderr

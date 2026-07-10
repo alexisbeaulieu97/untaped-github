@@ -7,9 +7,9 @@ from typing import Annotated, Literal, cast
 
 from cyclopts import Group, Parameter, Token, validators
 from untaped.api import (
+    ConfigError,
     OutputFormat,
     app_context,
-    clamp_parallel,
     create_app,
     echo,
     finish,
@@ -186,7 +186,10 @@ RefreshOption = Annotated[
         name="--refresh",
         negative="",
         group=FRESHNESS,
-        help="Force preparation of the selected scope (mutually exclusive with --cached).",
+        help=(
+            "Force preparation of the selected scope (mutually exclusive with --cached). "
+            "Default auto freshness refreshes uncached, stale, or under-profiled repositories."
+        ),
     ),
 ]
 CachedOption = Annotated[
@@ -267,10 +270,9 @@ def content_command(
     require_complete: RequireCompleteOption = False,
 ) -> None:
     """Report content locations matching REGEX (forced POSIX ERE by default)."""
-    from untaped_github.domain import ContentQuestion  # noqa: PLC0415
-
     _run(
-        question=ContentQuestion(regex),
+        question_kind="content",
+        pattern=regex,
         org=org,
         team=team,
         repo=repo,
@@ -320,8 +322,6 @@ def paths_command(
     require_complete: RequireCompleteOption = False,
 ) -> None:
     """Report tracked repository paths matching gitignore-style GLOB."""
-    from untaped_github.domain import PathQuestion  # noqa: PLC0415
-
     has_content_constraint = any(
         kind in ("with_content", "without_content") for kind, _value in constraint or ()
     )
@@ -332,7 +332,8 @@ def paths_command(
             "content matching options on sweep paths requires --with-content or --without-content"
         )
     _run(
-        question=PathQuestion(glob),
+        question_kind="path",
+        pattern=glob,
         org=org,
         team=team,
         repo=repo,
@@ -358,7 +359,8 @@ def paths_command(
 
 def _run(
     *,
-    question: object,
+    question_kind: Literal["content", "path"],
+    pattern: str,
     org: list[str] | None,
     team: list[str] | None,
     repo: list[str] | None,
@@ -388,8 +390,10 @@ def _run(
     from untaped_github.domain import (  # noqa: PLC0415
         ContentConstraint,
         ContentOptions,
+        ContentQuestion,
         PathConstraint,
         PathFilters,
+        PathQuestion,
         RefSelector,
         SweepQuery,
         SweepScope,
@@ -408,14 +412,38 @@ def _run(
         if cached and teams:
             raise_usage("--team requires the API and cannot resolve from cached corpus metadata")
 
-        settings = app_context().section("github", GithubSettings)
-        stdin_repos = tuple(read_identifiers([], stdin=True, id_field="full_name")) if stdin else ()
-        normalized_constraints: tuple[ContentConstraint | PathConstraint, ...] = tuple(
-            ContentConstraint(kind, value)
-            if kind in ("with_content", "without_content")
-            else PathConstraint(cast("Literal['with_path', 'without_path']", kind), value)
-            for kind, value in constraints or ()
-        )
+        question_label = "REGEX" if question_kind == "content" else "GLOB"
+        try:
+            question = (
+                ContentQuestion(pattern) if question_kind == "content" else PathQuestion(pattern)
+            )
+        except ValueError as exc:
+            raise ConfigError(f"{question_label} {pattern!r}: {exc}") from exc
+        normalized_constraint_list: list[ContentConstraint | PathConstraint] = []
+        for kind, value in constraints or ():
+            try:
+                constraint = (
+                    ContentConstraint(kind, value)
+                    if kind in ("with_content", "without_content")
+                    else PathConstraint(cast("Literal['with_path', 'without_path']", kind), value)
+                )
+            except ValueError as exc:
+                label = f"--{kind.replace('_', '-')}"
+                raise ConfigError(f"{label} {value!r}: {exc}") from exc
+            normalized_constraint_list.append(constraint)
+        normalized_constraints = tuple(normalized_constraint_list)
+        for label, values, include in (
+            ("--include-path", include_path, True),
+            ("--exclude-path", exclude_path, False),
+        ):
+            for value in values or ():
+                try:
+                    PathFilters(
+                        include=(value,) if include else (),
+                        exclude=() if include else (value,),
+                    )
+                except ValueError as exc:
+                    raise ConfigError(f"{label} {value!r}: {exc}") from exc
         query = SweepQuery(
             scope=SweepScope(
                 orgs=orgs,
@@ -424,7 +452,7 @@ def _run(
                 stdin=stdin,
                 include_archived=include_archived,
             ),
-            question=question,  # type: ignore[arg-type]
+            question=question,
             constraints=normalized_constraints,
             content_options=ContentOptions(
                 mode="fixed_strings" if fixed_strings else "extended_regex",
@@ -439,16 +467,14 @@ def _run(
             freshness="cached" if cached else "refresh" if refresh else "auto",
             context=context,
         )
+        settings = app_context().section("github", GithubSettings)
+        stdin_repos = tuple(read_identifiers([], stdin=True, id_field="full_name")) if stdin else ()
         corpus = GitCorpusCache()
         options = SweepOptions(
             query=query,
             stdin_repos=tuple(dict.fromkeys(stdin_repos)),
             fetch_depth=settings.sweep.fetch_depth,
-            sync_concurrency=clamp_parallel(
-                settings.sweep.sync_concurrency,
-                cap=32,
-                policy="Git corpus worker cap",
-            ),
+            sync_concurrency=_configured_concurrency(settings.sweep.sync_concurrency),
             max_age_seconds=settings.sweep.max_age_seconds,
         )
         if cached:
@@ -480,6 +506,17 @@ def _token(settings: GithubSettings) -> str:
     if settings.token is None:
         return ""
     return settings.token.get_secret_value().strip()
+
+
+def _configured_concurrency(value: int) -> int:
+    cap = 32
+    if value <= cap:
+        return value
+    echo(
+        f"warning: github.sweep.sync_concurrency {value} clamped to {cap} (Git corpus worker cap)",
+        err=True,
+    )
+    return cap
 
 
 def _status(report: object) -> None:
@@ -516,6 +553,10 @@ _HiddenList = Annotated[
 @app.default
 def _migration_command(
     *tokens: str,
+    org: Annotated[_HiddenList, Parameter(name="--org")] = None,
+    team: Annotated[_HiddenList, Parameter(name="--team")] = None,
+    repo: Annotated[_HiddenList, Parameter(name="--repo")] = None,
+    stdin: Annotated[_Hidden, Parameter(name="--stdin")] = False,
     grep: Annotated[_HiddenList, Parameter(name="--grep")] = None,
     not_grep: Annotated[_HiddenList, Parameter(name="--not-grep")] = None,
     has_file: Annotated[_HiddenList, Parameter(name="--has-file")] = None,
@@ -529,39 +570,76 @@ def _migration_command(
     ] = None,
     depth: Annotated[str | None, Parameter(name="--depth", show=False)] = None,
     parallel: Annotated[str | None, Parameter(name=["--parallel", "-j"], show=False)] = None,
+    ignore_case: Annotated[_Hidden, Parameter(name=["--ignore-case", "-i"])] = False,
+    fixed_strings: Annotated[_Hidden, Parameter(name=["--fixed-strings", "-F"])] = False,
+    word_regexp: Annotated[_Hidden, Parameter(name=["--word-regexp", "-w"])] = False,
+    refs: Annotated[str | None, Parameter(name="--refs", show=False)] = None,
+    ref: Annotated[_HiddenList, Parameter(name="--ref")] = None,
+    fmt: Annotated[str | None, Parameter(name=["--format", "-f"], show=False)] = None,
+    columns: Annotated[_HiddenList, Parameter(name=["--columns", "-c"])] = None,
+    fail_on_match: Annotated[_Hidden, Parameter(name="--fail-on-match")] = False,
     strict: Annotated[_Hidden, Parameter(name="--strict")] = False,
     sync: Annotated[_Hidden, Parameter(name="--sync")] = False,
     no_sync: Annotated[_Hidden, Parameter(name="--no-sync")] = False,
     archived: Annotated[_Hidden, Parameter(name="--archived")] = False,
 ) -> None:
     """Reject the retired flat sweep syntax with replacement guidance."""
-    del tokens
+    del (
+        tokens,
+        org,
+        team,
+        repo,
+        stdin,
+        ignore_case,
+        fixed_strings,
+        word_regexp,
+        refs,
+        ref,
+        fmt,
+        columns,
+        fail_on_match,
+    )
     migrations = (
-        (bool(grep), "old sweep content syntax was removed; use sweep content REGEX"),
-        (bool(not_grep), "--not-grep was removed; use --without-content"),
-        (bool(has_file), "old sweep path syntax was removed; use sweep paths GLOB"),
-        (bool(lacks_file), "--lacks-file was removed; use --without-path"),
-        (bool(path), "--path was removed; use --include-path or --exclude-path"),
-        (any_mode, "--any was removed; constraints are always conjunctive"),
-        (show is not None, "--show was removed; every sweep now emits one complete report"),
+        (bool(grep), "old --grep syntax was removed", "sweep content REGEX"),
+        (bool(not_grep), "--not-grep was removed; use --without-content", "sweep content REGEX"),
+        (bool(has_file), "old --has-file syntax was removed", "sweep paths GLOB"),
+        (bool(lacks_file), "--lacks-file was removed; use --without-path", "sweep paths GLOB"),
+        (
+            bool(path),
+            "--path was removed; use --include-path or --exclude-path",
+            "sweep content REGEX",
+        ),
+        (any_mode, "--any was removed; constraints are always conjunctive", None),
+        (
+            show is not None,
+            "--show was removed; every sweep now emits one complete report",
+            None,
+        ),
         (
             owners is not None,
             "--owners was removed; primary-evidence owners are always resolved",
+            None,
         ),
-        (depth is not None, "--depth was removed; configure github.sweep.fetch_depth"),
+        (
+            depth is not None,
+            "--depth was removed; configure github.sweep.fetch_depth",
+            None,
+        ),
         (
             parallel is not None,
             "--parallel was removed; configure github.sweep.sync_concurrency",
+            None,
         ),
-        (strict, "--strict was removed; use --require-complete"),
-        (sync, "--sync was removed; use --refresh"),
-        (no_sync, "--no-sync was removed; use --cached"),
-        (archived, "--archived was removed; use --include-archived"),
+        (strict, "--strict was removed; use --require-complete", None),
+        (sync, "--sync was removed; use --refresh", None),
+        (no_sync, "--no-sync was removed; use --cached", None),
+        (archived, "--archived was removed; use --include-archived", None),
     )
-    for active, message in migrations:
+    both = "sweep content REGEX or sweep paths GLOB"
+    for active, message, target in migrations:
         if active:
-            raise_usage(message)
-    raise_usage("choose sweep content REGEX or sweep paths GLOB")
+            raise_usage(f"{message}; migrate with {target or both}")
+    raise_usage(f"old flat sweep syntax was removed; choose {both}")
 
 
 __all__ = ["app"]
