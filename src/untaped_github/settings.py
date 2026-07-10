@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field, SecretStr
 class SweepSettings(BaseModel):
     """Settings for sweep corpus refresh behavior."""
 
-    max_age_seconds: int = 3600
-    sync_concurrency: int = 12
+    fetch_depth: int = Field(default=1, ge=0)
+    max_age_seconds: int = Field(default=3600, ge=0)
+    sync_concurrency: int = Field(default=12, gt=0)
 
 
 class GithubSettings(BaseModel):

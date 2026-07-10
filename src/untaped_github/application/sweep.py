@@ -1,13 +1,11 @@
-"""Application use case for repository sweep queries."""
+"""Application use case for evidence-first repository sweep queries."""
 
 from __future__ import annotations
 
-import fnmatch
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 from untaped.api import ConfigError, bounded_map
 
@@ -16,16 +14,26 @@ from untaped_github.application.inventory import (
     RepositoryInventoryScope,
 )
 from untaped_github.application.ports import GitCorpus
+from untaped_github.application.scopes import normalize_team_scopes
+from untaped_github.application.sweep_matching import SweepMatchers, compile_sweep_matchers
 from untaped_github.domain import (
     CODEOWNERS_LOCATIONS,
-    CorpusFailure,
+    ContentConstraint,
+    ContentMatch,
+    ContentQuestion,
     CorpusFreshness,
     CorpusRepoTarget,
     GrepHit,
+    MatchContext,
+    PathMatch,
     RefEvaluation,
     RefSelector,
-    RepoSweepOutcome,
+    SweepFailure,
+    SweepMatch,
     SweepQuery,
+    SweepReport,
+    SweepResult,
+    SweepSummary,
     covers,
     parse_codeowners,
     ref_matches,
@@ -38,83 +46,63 @@ AuthHeaderSupplier = Callable[[], str | None]
 
 @dataclass(frozen=True)
 class SweepOptions:
-    """Options for a sweep run."""
+    """A sweep query plus configuration-only corpus tuning."""
 
-    scope: RepositoryInventoryScope
-    stdin_repos: tuple[str, ...]
-    include_archived: bool
     query: SweepQuery
-    sync: Literal["auto", "force", "off"]
-    max_age_seconds: int
-    depth: int
-    parallel: int
-    owners: bool
+    stdin_repos: tuple[str, ...] = ()
+    fetch_depth: int = 1
+    sync_concurrency: int = 12
+    max_age_seconds: int = 3600
 
     def __post_init__(self) -> None:
-        if self.depth < 0:
-            raise ValueError("depth must be non-negative")
-        if self.parallel < 1:
-            raise ValueError("parallel must be positive")
+        if self.fetch_depth < 0:
+            raise ValueError("fetch_depth must be non-negative")
+        if self.sync_concurrency < 1:
+            raise ValueError("sync_concurrency must be positive")
         if self.max_age_seconds < 0:
             raise ValueError("max_age_seconds must be non-negative")
 
 
 @dataclass(frozen=True)
-class SweepMatch:
-    """One deduped content match, possibly reachable from multiple refs."""
-
-    full_name: str
-    refs: tuple[str, ...]
-    path: str
-    line: int
-    text: str
-
-
-@dataclass(frozen=True)
-class SweepReport:
-    """Result of a repository sweep."""
-
-    rows: tuple[RepoSweepOutcome, ...]
-    matches: tuple[SweepMatch, ...]
-    unscanned: tuple[CorpusFailure, ...]
-    scanned: int
-    refreshed: int
-    cached: int
-    oldest_fetched_at: datetime | None
-
-
-@dataclass(frozen=True)
 class _ReadyRepo:
     repo: CorpusRepoTarget
-    fetched_at: datetime | None
+    fetched_at: datetime
     refreshed: bool
 
 
 @dataclass(frozen=True)
 class _RepoScan:
-    outcome: RepoSweepOutcome | None
-    matches: tuple[_ContentMatch, ...]
+    result: SweepResult | None
+
+
+@dataclass(frozen=True)
+class _ContentEvidence:
+    ref: str
+    blob_oid: str
+    path: str
+    start_line: int
+    end_line: int
+    content: str
+    context: MatchContext | None
+
+
+@dataclass(frozen=True)
+class _PathEvidence:
+    ref: str
+    path: str
+
+
+type _Evidence = _ContentEvidence | _PathEvidence
 
 
 @dataclass(frozen=True)
 class _RefScan:
     evaluation: RefEvaluation
-    owner_paths: tuple[str, ...]
-    matches: tuple[_ContentMatch, ...]
-
-
-@dataclass(frozen=True)
-class _ContentMatch:
-    full_name: str
-    ref: str
-    blob_oid: str
-    path: str
-    line: int
-    text: str
+    evidence: tuple[_Evidence, ...]
 
 
 class Sweep:
-    """Run a sweep query across repository inventory and local corpus refs."""
+    """Run one primary sweep question across selected repositories and refs."""
 
     def __init__(
         self,
@@ -130,75 +118,96 @@ class Sweep:
         self._auth_header = auth_header
 
     def __call__(self, options: SweepOptions) -> SweepReport:
-        options.query.validate()
+        matchers = compile_sweep_matchers(
+            options.query,
+            corpus=self._corpus,
+            root=self._root,
+        )
         repos = self._resolve_scope(options)
-        ready, prep_failures = self._prepare_repos(repos, options)
-
+        ready, prepare_failures = self._prepare_repos(repos, options)
         scans: list[_RepoScan] = []
-        scan_failures: list[CorpusFailure] = []
+        scan_failures: list[SweepFailure] = []
 
-        def scan_one(ready_repo: _ReadyRepo) -> _RepoScan | CorpusFailure:
+        def scan_one(ready_repo: _ReadyRepo) -> _RepoScan | SweepFailure:
             try:
-                return self._scan_repo(ready_repo, options)
+                return self._scan_repo(ready_repo, options.query, matchers)
             except GitCorpusError as exc:
-                return CorpusFailure(repo=ready_repo.repo.full_name, reason=str(exc))
+                return SweepFailure(
+                    full_name=ready_repo.repo.full_name,
+                    stage="scan",
+                    reason=str(exc),
+                )
 
-        def record(_ready_repo: _ReadyRepo, outcome: _RepoScan | CorpusFailure) -> None:
-            if isinstance(outcome, CorpusFailure):
+        def record(_ready_repo: _ReadyRepo, outcome: _RepoScan | SweepFailure) -> None:
+            if isinstance(outcome, SweepFailure):
                 scan_failures.append(outcome)
             else:
                 scans.append(outcome)
 
-        bounded_map(scan_one, ready, concurrency=options.parallel, on_each=record)
-        rows = tuple(
-            sorted(
-                (scan.outcome for scan in scans if scan.outcome is not None),
-                key=lambda row: row.full_name,
-            )
+        bounded_map(
+            scan_one,
+            ready,
+            concurrency=options.sync_concurrency,
+            on_each=record,
         )
-        all_matches = [match for scan in scans for match in scan.matches]
-        scanned_dates = [ready_repo.fetched_at for ready_repo in ready if ready_repo.fetched_at]
-        refreshed = sum(1 for ready_repo in ready if ready_repo.refreshed)
-        cached = len(ready) - refreshed
+        results = tuple(scan.result for scan in scans if scan.result is not None)
+        failures = (*prepare_failures, *scan_failures)
+        refreshed = sum(item.refreshed for item in ready)
         return SweepReport(
-            rows=rows,
-            matches=_dedupe_matches(all_matches),
-            unscanned=(*prep_failures, *scan_failures),
-            scanned=len(scans),
-            refreshed=refreshed,
-            cached=cached,
-            oldest_fetched_at=min(scanned_dates) if scanned_dates else None,
+            query=options.query,
+            results=results,
+            failures=failures,
+            summary=SweepSummary(
+                selected=len(repos),
+                prepared=len(ready),
+                scanned=len(scans),
+                matched=len(results),
+                unscanned=len(failures),
+                refreshed=refreshed,
+                cached=len(ready) - refreshed,
+                oldest_fetched_at=min((item.fetched_at for item in ready), default=None),
+            ),
         )
 
     def _resolve_scope(self, options: SweepOptions) -> tuple[CorpusRepoTarget, ...]:
-        if options.sync == "off":
-            return self._resolve_offline_scope(options)
+        if options.query.freshness == "cached":
+            return self._resolve_cached_scope(options)
 
-        repos = tuple(dict.fromkeys((*options.scope.repos, *options.stdin_repos)))
+        try:
+            teams = normalize_team_scopes(
+                options.query.scope.teams,
+                orgs=options.query.scope.orgs,
+            )
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        repos = tuple(dict.fromkeys((*options.query.scope.repos, *options.stdin_repos)))
         scope = RepositoryInventoryScope(
-            orgs=options.scope.orgs,
-            teams=options.scope.teams,
+            orgs=options.query.scope.orgs,
+            teams=teams,
             repos=repos,
         )
         rows = (
-            item for item in self._inventory(scope) if options.include_archived or not item.archived
+            item
+            for item in self._inventory(scope)
+            if options.query.scope.include_archived or not item.archived
         )
         return tuple(_target(item) for item in rows)
 
-    def _resolve_offline_scope(self, options: SweepOptions) -> tuple[CorpusRepoTarget, ...]:
-        if options.scope.teams:
-            raise ConfigError("--team requires the API and cannot resolve offline")
-        names = set((*options.scope.repos, *options.stdin_repos))
-        rows = self._corpus.list_repos(root=self._root)
+    def _resolve_cached_scope(self, options: SweepOptions) -> tuple[CorpusRepoTarget, ...]:
+        scope = options.query.scope
+        if scope.teams:
+            raise ConfigError(
+                "--team requires the API and cannot resolve from cached corpus metadata"
+            )
+        names = set((*scope.repos, *options.stdin_repos))
         targets: list[CorpusRepoTarget] = []
+        rows = self._corpus.list_repos(root=self._root)
+        known_names = {row.repo for row in rows}
         for row in rows:
-            if not options.include_archived and row.archived:
+            if not scope.include_archived and row.archived:
                 continue
-            if options.scope.orgs and not any(
-                row.repo.startswith(f"{org}/") for org in options.scope.orgs
-            ):
-                continue
-            if names and row.repo not in names:
+            selected_by_org = any(row.repo.startswith(f"{org}/") for org in scope.orgs)
+            if (scope.orgs or names) and not (selected_by_org or row.repo in names):
                 continue
             targets.append(
                 CorpusRepoTarget(
@@ -208,130 +217,182 @@ class Sweep:
                     archived=row.archived,
                 )
             )
-        if not targets:
-            raise ConfigError("corpus has no repos in scope; run without --no-sync to populate")
+        targets.extend(
+            CorpusRepoTarget(full_name=name, default_branch=None)
+            for name in dict.fromkeys((*scope.repos, *options.stdin_repos))
+            if name not in known_names
+        )
         return tuple(sorted(targets, key=lambda repo: repo.full_name))
 
     def _prepare_repos(
         self,
         repos: tuple[CorpusRepoTarget, ...],
         options: SweepOptions,
-    ) -> tuple[tuple[_ReadyRepo, ...], tuple[CorpusFailure, ...]]:
-        if options.sync == "off":
-            return tuple(
-                _ReadyRepo(
-                    repo=repo,
-                    fetched_at=_freshness_datetime(
-                        self._corpus.repo_freshness(repo, root=self._root)
-                    ),
-                    refreshed=False,
-                )
-                for repo in repos
-            ), ()
-
+    ) -> tuple[tuple[_ReadyRepo, ...], tuple[SweepFailure, ...]]:
         ready: list[_ReadyRepo] = []
-        failures: list[CorpusFailure] = []
+        failures: list[SweepFailure] = []
 
-        def prepare_one(repo: CorpusRepoTarget) -> _ReadyRepo | CorpusFailure:
+        def prepare_one(repo: CorpusRepoTarget) -> _ReadyRepo | SweepFailure:
             freshness = self._corpus.repo_freshness(repo, root=self._root)
-            must_refresh = options.sync == "force" or _needs_refresh(
+            if options.query.freshness == "cached":
+                if freshness is None or not covers(freshness, options.query.refs):
+                    return SweepFailure(
+                        full_name=repo.full_name,
+                        stage="prepare",
+                        reason="cached corpus does not cover the selected refs",
+                    )
+                return _ReadyRepo(repo=repo, fetched_at=freshness.fetched_at, refreshed=False)
+
+            must_refresh = options.query.freshness == "refresh" or _needs_refresh(
                 freshness,
                 selector=options.query.refs,
                 max_age_seconds=options.max_age_seconds,
             )
             if not must_refresh:
-                return _ReadyRepo(
-                    repo=repo, fetched_at=_freshness_datetime(freshness), refreshed=False
-                )
+                if freshness is None:  # pragma: no cover - guarded by _needs_refresh
+                    raise AssertionError("fresh corpus metadata is required")
+                return _ReadyRepo(repo=repo, fetched_at=freshness.fetched_at, refreshed=False)
             try:
                 result = self._corpus.sync_repo(
                     repo,
                     root=self._root,
                     selector=options.query.refs,
-                    depth=options.depth,
+                    depth=options.fetch_depth,
                     auth_header=self._auth_header(),
                 )
             except GitCorpusError as exc:
                 if freshness is not None and covers(freshness, options.query.refs):
-                    return _ReadyRepo(repo=repo, fetched_at=freshness.fetched_at, refreshed=False)
-                return CorpusFailure(repo=repo.full_name, reason=str(exc))
-            return _ReadyRepo(
-                repo=repo,
-                fetched_at=_parse_datetime(result.fetched_at),
-                refreshed=True,
-            )
+                    return _ReadyRepo(
+                        repo=repo,
+                        fetched_at=freshness.fetched_at,
+                        refreshed=False,
+                    )
+                return SweepFailure(
+                    full_name=repo.full_name,
+                    stage="prepare",
+                    reason=str(exc),
+                )
+            fetched_at = _parse_datetime(result.fetched_at)
+            if fetched_at is None:
+                return SweepFailure(
+                    full_name=repo.full_name,
+                    stage="prepare",
+                    reason="corpus preparation did not record a fetch timestamp",
+                )
+            return _ReadyRepo(repo=repo, fetched_at=fetched_at, refreshed=True)
 
-        def record(_repo: CorpusRepoTarget, outcome: _ReadyRepo | CorpusFailure) -> None:
-            if isinstance(outcome, CorpusFailure):
+        def record(_repo: CorpusRepoTarget, outcome: _ReadyRepo | SweepFailure) -> None:
+            if isinstance(outcome, SweepFailure):
                 failures.append(outcome)
             else:
                 ready.append(outcome)
 
-        bounded_map(prepare_one, repos, concurrency=options.parallel, on_each=record)
+        bounded_map(
+            prepare_one,
+            repos,
+            concurrency=options.sync_concurrency,
+            on_each=record,
+        )
         return tuple(ready), tuple(failures)
 
-    def _scan_repo(self, ready: _ReadyRepo, options: SweepOptions) -> _RepoScan:
-        refs_matched: list[str] = []
-        aggregate_hits: dict[str, int] = {}
-        owner_paths: set[str] = set()
-        matches: list[_ContentMatch] = []
-        for ref in self._corpus.local_refs(
-            ready.repo, root=self._root, selector=options.query.refs
-        ):
-            ref_scan = self._scan_ref(ready.repo, ref, options.query)
-            if not ref_matches(options.query, ref_scan.evaluation):
+    def _scan_repo(
+        self,
+        ready: _ReadyRepo,
+        query: SweepQuery,
+        matchers: SweepMatchers,
+    ) -> _RepoScan:
+        qualifying_refs: list[str] = []
+        evidence: list[_Evidence] = []
+        owners: set[str] = set()
+        blob_cache: dict[str, str] = {}
+        for ref in self._corpus.local_refs(ready.repo, root=self._root, selector=query.refs):
+            ref_scan = self._scan_ref(
+                ready.repo,
+                ref,
+                query,
+                matchers,
+            )
+            if not ref_matches(query, ref_scan.evaluation):
                 continue
-            refs_matched.append(ref)
-            owner_paths.update(ref_scan.owner_paths)
-            matches.extend(ref_scan.matches)
-            for label, count in ref_scan.evaluation.hits.items():
-                aggregate_hits[label] = max(aggregate_hits.get(label, 0), count)
+            qualified_evidence = self._add_context(
+                ready.repo,
+                ref_scan.evidence,
+                radius=query.context,
+                blob_cache=blob_cache,
+            )
+            qualifying_refs.append(ref)
+            evidence.extend(qualified_evidence)
+            owners.update(
+                self._owners_for(
+                    ready.repo,
+                    ref=ref,
+                    paths=(item.path for item in qualified_evidence),
+                )
+            )
 
-        if not refs_matched:
-            return _RepoScan(outcome=None, matches=())
-
-        owners = self._owners_for(ready.repo, paths=owner_paths) if options.owners else ()
+        if not qualifying_refs:
+            return _RepoScan(result=None)
         return _RepoScan(
-            outcome=RepoSweepOutcome(
+            result=SweepResult(
                 full_name=ready.repo.full_name,
                 clone_url=ready.repo.clone_url,
-                matched=True,
-                refs_matched=tuple(refs_matched),
-                hits=aggregate_hits,
-                owners=owners,
-                synced_at=ready.fetched_at.isoformat() if ready.fetched_at else None,
-            ),
-            matches=tuple(matches),
+                refs_matched=tuple(qualifying_refs),
+                matches=_group_evidence(evidence),
+                owners=tuple(owners),
+                synced_at=ready.fetched_at,
+            )
         )
 
-    def _scan_ref(self, repo: CorpusRepoTarget, ref: str, query: SweepQuery) -> _RefScan:
-        hits: dict[str, int] = {}
-        owner_paths: set[str] = set()
-        matches: list[_ContentMatch] = []
-        for pattern in query.greps:
-            label = f"grep:{pattern}"
-            grep_hits = self._grep(repo, ref, pattern, query)
-            hits[label] = len(grep_hits)
-            owner_paths.update(hit.path for hit in grep_hits)
-            matches.extend(_content_match(repo.full_name, ref, hit) for hit in grep_hits)
-        for pattern in query.not_greps:
-            label = f"not-grep:{pattern}"
-            hits[label] = len(self._grep(repo, ref, pattern, query))
-
+    def _scan_ref(
+        self,
+        repo: CorpusRepoTarget,
+        ref: str,
+        query: SweepQuery,
+        matchers: SweepMatchers,
+    ) -> _RefScan:
         tree: tuple[str, ...] | None = None
-        for glob in query.has_files:
-            tree = self._tree(repo, ref) if tree is None else tree
-            matched = _matching_paths(tree, glob)
-            hits[f"has-file:{glob}"] = 1 if matched else 0
-            owner_paths.update(matched)
-        for glob in query.lacks_files:
-            tree = self._tree(repo, ref) if tree is None else tree
-            hits[f"lacks-file:{glob}"] = 1 if _matching_paths(tree, glob) else 0
 
+        def paths() -> tuple[str, ...]:
+            nonlocal tree
+            if tree is None:
+                tree = self._corpus.tree_paths(repo, root=self._root, ref=ref)
+            return tree
+
+        evidence: tuple[_Evidence, ...]
+        if isinstance(query.question, ContentQuestion):
+            primary_hits = self._grep(repo, ref, query.question.pattern, query, matchers)
+            primary_count = len(primary_hits)
+            evidence = tuple(
+                _ContentEvidence(
+                    ref=ref,
+                    blob_oid=hit.blob_oid,
+                    path=hit.path,
+                    start_line=hit.line,
+                    end_line=hit.line,
+                    content=hit.text,
+                    context=None,
+                )
+                for hit in primary_hits
+            )
+        else:
+            primary_paths = matchers.matching_question_paths(paths())
+            primary_count = len(primary_paths)
+            evidence = tuple(_PathEvidence(ref=ref, path=path) for path in primary_paths)
+
+        constraint_hits: list[int] = []
+        for index, constraint in enumerate(query.constraints):
+            if isinstance(constraint, ContentConstraint):
+                count = len(self._grep(repo, ref, constraint.pattern, query, matchers))
+            else:
+                count = len(matchers.matching_constraint_paths(index, paths()))
+            constraint_hits.append(count)
         return _RefScan(
-            evaluation=RefEvaluation(ref=ref, hits=hits),
-            owner_paths=tuple(sorted(owner_paths)),
-            matches=tuple(matches),
+            evaluation=RefEvaluation(
+                ref=ref,
+                question_hits=primary_count,
+                constraint_hits=tuple(constraint_hits),
+            ),
+            evidence=evidence,
         )
 
     def _grep(
@@ -340,28 +401,76 @@ class Sweep:
         ref: str,
         pattern: str,
         query: SweepQuery,
+        matchers: SweepMatchers,
     ) -> tuple[GrepHit, ...]:
-        return self._corpus.grep_ref(
+        hits = self._corpus.grep_ref(
             repo,
             root=self._root,
             ref=ref,
             pattern=pattern,
-            ignore_case=query.ignore_case,
-            fixed_strings=query.fixed_strings,
-            word_regexp=query.word_regexp,
+            ignore_case=query.content_options.ignore_case,
+            fixed_strings=query.content_options.mode == "fixed_strings",
+            word_regexp=query.content_options.word_regexp,
         )
+        return matchers.filter_content_hits(hits)
 
-    def _tree(self, repo: CorpusRepoTarget, ref: str) -> tuple[str, ...]:
-        return self._corpus.tree_paths(repo, root=self._root, ref=ref)
+    def _add_context(
+        self,
+        repo: CorpusRepoTarget,
+        evidence: tuple[_Evidence, ...],
+        *,
+        radius: int,
+        blob_cache: dict[str, str],
+    ) -> tuple[_Evidence, ...]:
+        if radius == 0:
+            return evidence
+        with_context: list[_Evidence] = []
+        for item in evidence:
+            if isinstance(item, _PathEvidence):
+                with_context.append(item)
+                continue
+            blob = blob_cache.get(item.blob_oid)
+            if blob is None:
+                blob = self._corpus.read_blob(
+                    repo,
+                    root=self._root,
+                    ref=item.ref,
+                    path=item.path,
+                )
+                if blob is None:
+                    raise GitCorpusError(
+                        f"matched blob is unavailable for context: {item.ref}:{item.path}"
+                    )
+                blob_cache[item.blob_oid] = blob
+            with_context.append(
+                _ContentEvidence(
+                    ref=item.ref,
+                    blob_oid=item.blob_oid,
+                    path=item.path,
+                    start_line=item.start_line,
+                    end_line=item.end_line,
+                    content=item.content,
+                    context=_match_context(blob, line=item.start_line, radius=radius),
+                )
+            )
+        return tuple(with_context)
 
-    def _owners_for(self, repo: CorpusRepoTarget, *, paths: Iterable[str]) -> tuple[str, ...]:
-        branch = repo.default_branch
-        if not branch:
-            return ()
+    def _owners_for(
+        self,
+        repo: CorpusRepoTarget,
+        *,
+        ref: str,
+        paths: Iterable[str],
+    ) -> tuple[str, ...]:
         rules = None
-        for path in CODEOWNERS_LOCATIONS:
+        for codeowners_path in CODEOWNERS_LOCATIONS:
             try:
-                text = self._corpus.read_blob(repo, root=self._root, ref=branch, path=path)
+                text = self._corpus.read_blob(
+                    repo,
+                    root=self._root,
+                    ref=ref,
+                    path=codeowners_path,
+                )
             except GitCorpusError:
                 return ()
             if text is None:
@@ -373,14 +482,7 @@ class Sweep:
             break
         if rules is None:
             return ()
-        owner_rows: list[str] = []
-        sorted_paths = tuple(sorted(paths))
-        if not sorted_paths:
-            owner_rows.extend(rules.default_owners())
-        else:
-            for path in sorted_paths:
-                owner_rows.extend(rules.owners_for(path))
-        return tuple(dict.fromkeys(owner_rows))
+        return tuple(owner for path in sorted(set(paths)) for owner in rules.owners_for(path))
 
 
 def _target(item: RepositoryInventoryItem) -> CorpusRepoTarget:
@@ -399,15 +501,9 @@ def _needs_refresh(
     selector: RefSelector,
     max_age_seconds: int,
 ) -> bool:
-    if freshness is None:
-        return True
-    if not covers(freshness, selector):
+    if freshness is None or not covers(freshness, selector):
         return True
     return (datetime.now(UTC) - freshness.fetched_at).total_seconds() > max_age_seconds
-
-
-def _freshness_datetime(freshness: CorpusFreshness | None) -> datetime | None:
-    return freshness.fetched_at if freshness is not None else None
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -419,36 +515,49 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
-def _matching_paths(paths: tuple[str, ...], glob: str) -> tuple[str, ...]:
-    return tuple(path for path in paths if fnmatch.fnmatchcase(path, glob))
-
-
-def _content_match(full_name: str, ref: str, hit: GrepHit) -> _ContentMatch:
-    return _ContentMatch(
-        full_name=full_name,
-        ref=ref,
-        blob_oid=hit.blob_oid,
-        path=hit.path,
-        line=hit.line,
-        text=hit.text,
+def _match_context(blob: str, *, line: int, radius: int) -> MatchContext:
+    lines = blob.splitlines()
+    start = max(1, line - radius)
+    end = min(len(lines), line + radius)
+    return MatchContext(
+        start_line=start,
+        end_line=end,
+        content="\n".join(lines[start - 1 : end]),
     )
 
 
-def _dedupe_matches(matches: Iterable[_ContentMatch]) -> tuple[SweepMatch, ...]:
-    grouped: dict[tuple[str, str, str, int, str], list[str]] = {}
-    for match in matches:
-        key = (match.full_name, match.blob_oid, match.path, match.line, match.text)
-        grouped.setdefault(key, [])
-        if match.ref not in grouped[key]:
-            grouped[key].append(match.ref)
-    rows = [
-        SweepMatch(
-            full_name=full_name,
+def _group_evidence(evidence: Iterable[_Evidence]) -> tuple[SweepMatch, ...]:
+    content_groups: dict[
+        tuple[str, str, int, int, str],
+        tuple[list[str], MatchContext | None],
+    ] = {}
+    path_groups: dict[str, list[str]] = {}
+    for item in evidence:
+        if isinstance(item, _ContentEvidence):
+            key = (
+                item.blob_oid,
+                item.path,
+                item.start_line,
+                item.end_line,
+                item.content,
+            )
+            refs, _context = content_groups.setdefault(key, ([], item.context))
+            refs.append(item.ref)
+        else:
+            path_groups.setdefault(item.path, []).append(item.ref)
+    matches: list[SweepMatch] = [
+        ContentMatch(
             refs=tuple(refs),
             path=path,
-            line=line,
-            text=text,
+            start_line=start_line,
+            end_line=end_line,
+            content=content,
+            context=context,
         )
-        for (full_name, _blob_oid, path, line, text), refs in grouped.items()
+        for (_blob_oid, path, start_line, end_line, content), (
+            refs,
+            context,
+        ) in content_groups.items()
     ]
-    return tuple(sorted(rows, key=lambda row: (row.full_name, row.path, row.line, row.text)))
+    matches.extend(PathMatch(refs=tuple(refs), path=path) for path, refs in path_groups.items())
+    return tuple(matches)

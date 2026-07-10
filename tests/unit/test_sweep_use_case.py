@@ -3,23 +3,38 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
 
 import pytest
 from untaped.api import ConfigError
 
-from untaped_github.application import RepositoryInventoryItem, RepositoryInventoryScope, TeamScope
+from untaped_github.application import (
+    RepositoryInventoryItem,
+    RepositoryInventoryScope,
+)
 from untaped_github.application.sweep import Sweep, SweepOptions
 from untaped_github.domain import (
-    CorpusFailure,
+    ContentConstraint,
+    ContentMatch,
+    ContentOptions,
+    ContentQuestion,
     CorpusFreshness,
     CorpusRepoResult,
     CorpusRepoTarget,
     GrepHit,
+    PathConstraint,
+    PathFilters,
+    PathMatch,
+    PathQuestion,
     RefSelector,
     SweepQuery,
+    SweepScope,
 )
 from untaped_github.domain.errors import GitCorpusError
+
+MAIN = "refs/heads/main"
+BRANCH = "refs/heads/release/1"
+TAG = "refs/tags/release/1"
+FETCHED_AT = datetime(2026, 7, 10, 12, tzinfo=UTC)
 
 
 def _item(full_name: str, *, archived: bool = False) -> RepositoryInventoryItem:
@@ -33,35 +48,62 @@ def _item(full_name: str, *, archived: bool = False) -> RepositoryInventoryItem:
     )
 
 
-def _row(full_name: str, *, archived: bool = False) -> CorpusRepoResult:
+def _row(
+    full_name: str,
+    *,
+    archived: bool = False,
+    profile: str = "default",
+    ref_globs: tuple[str, ...] = (),
+) -> CorpusRepoResult:
     return CorpusRepoResult(
         repo=full_name,
         ref="main",
         path=f"/corpus/{full_name}",
         clone_url=f"https://github.example.com/{full_name}.git",
-        fetched_at="2026-07-06T12:00:00+00:00",
+        fetched_at=FETCHED_AT.isoformat(),
+        profile=profile,
+        ref_globs=ref_globs,
         archived=archived,
+    )
+
+
+def _query(
+    question: ContentQuestion | PathQuestion,
+    *,
+    constraints: tuple[ContentConstraint | PathConstraint, ...] = (),
+    scope: SweepScope | None = None,
+    refs: RefSelector | None = None,
+    freshness: str = "auto",
+    context: int = 0,
+    content_options: ContentOptions | None = None,
+    path_filters: PathFilters | None = None,
+) -> SweepQuery:
+    return SweepQuery(
+        scope=scope or SweepScope(repos=("acme/api",)),
+        question=question,
+        constraints=constraints,
+        refs=refs or RefSelector(),
+        freshness=freshness,  # type: ignore[arg-type]
+        context=context,
+        content_options=content_options or ContentOptions(),
+        path_filters=path_filters or PathFilters(),
     )
 
 
 def _options(
     query: SweepQuery,
     *,
-    scope: RepositoryInventoryScope | None = None,
-    sync: Literal["auto", "force", "off"] = "auto",
-    include_archived: bool = False,
+    stdin_repos: tuple[str, ...] = (),
+    fetch_depth: int = 1,
+    sync_concurrency: int = 1,
     max_age_seconds: int = 3600,
 ) -> SweepOptions:
     return SweepOptions(
-        scope=scope or RepositoryInventoryScope(),
-        stdin_repos=(),
-        include_archived=include_archived,
         query=query,
-        sync=sync,
+        stdin_repos=stdin_repos,
+        fetch_depth=fetch_depth,
+        sync_concurrency=sync_concurrency,
         max_age_seconds=max_age_seconds,
-        depth=1,
-        parallel=1,
-        owners=True,
     )
 
 
@@ -75,10 +117,11 @@ class _Resolver:
         return self.rows
 
 
-@dataclass
-class _Synced:
+@dataclass(frozen=True)
+class _SyncCall:
     repo: str
     selector: RefSelector
+    depth: int
 
 
 class _Corpus:
@@ -92,12 +135,15 @@ class _Corpus:
         self.cached_rows = cached_rows
         self.freshness = freshness or {}
         self.sync_failures = sync_failures or {}
-        self.synced: list[_Synced] = []
+        self.validation_errors: dict[str, str] = {}
+        self.synced: list[_SyncCall] = []
         self.local_ref_map: dict[str, tuple[str, ...]] = {}
+        self.local_ref_failures: dict[str, str] = {}
         self.tree_map: dict[tuple[str, str], tuple[str, ...]] = {}
         self.grep_map: dict[tuple[str, str, str], tuple[GrepHit, ...]] = {}
         self.blob_map: dict[tuple[str, str, str], str | None] = {}
         self.grep_calls: list[tuple[str, str, str, bool, bool, bool]] = []
+        self.read_calls: list[tuple[str, str, str]] = []
 
     def sync_repo(
         self,
@@ -108,26 +154,21 @@ class _Corpus:
         depth: int,
         auth_header: str | None,
     ) -> CorpusRepoResult:
-        self.synced.append(_Synced(repo.full_name, selector))
+        self.synced.append(_SyncCall(repo.full_name, selector, depth))
         reason = self.sync_failures.get(repo.full_name)
         if reason is not None:
             raise GitCorpusError(reason)
-        fetched_at = datetime(2026, 7, 6, 12, tzinfo=UTC).isoformat()
         self.freshness[repo.full_name] = CorpusFreshness(
-            fetched_at=datetime.fromisoformat(fetched_at),
+            fetched_at=FETCHED_AT,
             profile=selector.profile,
             ref_globs=selector.globs,
             archived=repo.archived,
         )
-        return CorpusRepoResult(
-            repo=repo.full_name,
-            ref=repo.default_branch or "main",
-            path=str(root / repo.full_name.replace("/", "__")),
-            clone_url=repo.clone_url,
-            fetched_at=fetched_at,
+        return _row(
+            repo.full_name,
+            archived=repo.archived,
             profile=selector.profile,
             ref_globs=selector.globs,
-            archived=repo.archived,
         )
 
     def repo_freshness(self, repo: CorpusRepoTarget, *, root: Path) -> CorpusFreshness | None:
@@ -140,7 +181,10 @@ class _Corpus:
         root: Path,
         selector: RefSelector,
     ) -> tuple[str, ...]:
-        return self.local_ref_map.get(repo.full_name, ("main",))
+        reason = self.local_ref_failures.get(repo.full_name)
+        if reason is not None:
+            raise GitCorpusError(reason)
+        return self.local_ref_map.get(repo.full_name, (MAIN,))
 
     def grep_ref(
         self,
@@ -169,7 +213,17 @@ class _Corpus:
         ref: str,
         path: str,
     ) -> str | None:
+        self.read_calls.append((repo.full_name, ref, path))
         return self.blob_map.get((repo.full_name, ref, path))
+
+    def validate_pattern(
+        self,
+        *,
+        root: Path,
+        pattern: str,
+        fixed_strings: bool,
+    ) -> str | None:
+        return self.validation_errors.get(pattern)
 
     def list_repos(self, *, root: Path) -> tuple[CorpusRepoResult, ...]:
         return self.cached_rows
@@ -184,227 +238,415 @@ def _sweep(corpus: _Corpus, resolver: _Resolver, root: Path) -> Sweep:
     )
 
 
-def test_offline_scope_from_corpus_metadata(tmp_path: Path) -> None:
-    corpus = _Corpus(
-        cached_rows=(
-            _row("acme/api"),
-            _row("acme/archived", archived=True),
-            _row("other/api"),
-        )
-    )
-    corpus.tree_map[("acme/api", "main")] = ("README.md",)
+def _hit(path: str, *, line: int = 1, text: str = "needle", oid: str = "oid") -> GrepHit:
+    return GrepHit(path=path, line=line, text=text, blob_oid=oid)
 
-    report = _sweep(corpus, _Resolver(()), tmp_path / "corpus")(
+
+def test_matchers_compile_before_inventory_or_repository_preparation(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.validation_errors["["] = "invalid regular expression"
+    resolver = _Resolver((_item("acme/api"),))
+
+    with pytest.raises(ConfigError, match="invalid regular expression"):
+        _sweep(corpus, resolver, tmp_path / "corpus")(
+            _options(_query(ContentQuestion(pattern="[")))
+        )
+
+    assert resolver.scopes == []
+    assert corpus.synced == []
+
+
+@pytest.mark.parametrize("question_kind", ["content", "path"])
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        ContentConstraint(kind="with_content", pattern="required"),
+        ContentConstraint(kind="without_content", pattern="forbidden"),
+        PathConstraint(kind="with_path", pattern="required.txt"),
+        PathConstraint(kind="without_path", pattern="forbidden.txt"),
+    ],
+)
+def test_primary_and_each_constraint_must_match_on_the_same_ref(
+    tmp_path: Path,
+    question_kind: str,
+    constraint: ContentConstraint | PathConstraint,
+) -> None:
+    corpus = _Corpus()
+    corpus.local_ref_map["acme/api"] = (MAIN, BRANCH)
+    if question_kind == "content":
+        question = ContentQuestion(pattern="primary")
+        corpus.grep_map[("acme/api", MAIN, "primary")] = (_hit("primary.txt"),)
+    else:
+        question = PathQuestion(pattern="primary.txt")
+        corpus.tree_map[("acme/api", MAIN)] = ("primary.txt",)
+
+    if constraint.kind == "with_content":
+        corpus.grep_map[("acme/api", BRANCH, constraint.pattern)] = (_hit("witness.txt"),)
+    elif constraint.kind == "without_content":
+        corpus.grep_map[("acme/api", MAIN, constraint.pattern)] = (_hit("witness.txt"),)
+    elif constraint.kind == "with_path":
+        corpus.tree_map[("acme/api", BRANCH)] = ("required.txt",)
+    else:
+        current = corpus.tree_map.get(("acme/api", MAIN), ())
+        corpus.tree_map[("acme/api", MAIN)] = (*current, "forbidden.txt")
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(question, constraints=(constraint,)))
+    )
+
+    assert report.results == ()
+    assert report.summary.scanned == 1
+    assert report.summary.matched == 0
+
+
+def test_constraints_are_conjunctive_and_only_primary_content_is_reported(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.grep_map[("acme/api", MAIN, "primary")] = (_hit("src/app.py", text="primary"),)
+    corpus.grep_map[("acme/api", MAIN, "required")] = (
+        _hit("constraint-only.txt", text="required", oid="constraint"),
+    )
+    corpus.tree_map[("acme/api", MAIN)] = ("src/app.py", "required.txt")
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
         _options(
-            SweepQuery(has_files=("README.md",)),
-            scope=RepositoryInventoryScope(orgs=("acme",)),
-            sync="off",
+            _query(
+                ContentQuestion(pattern="primary"),
+                constraints=(
+                    ContentConstraint(kind="with_content", pattern="required"),
+                    ContentConstraint(kind="without_content", pattern="forbidden"),
+                    PathConstraint(kind="with_path", pattern="required.txt"),
+                    PathConstraint(kind="without_path", pattern="forbidden.txt"),
+                ),
+            )
         )
     )
 
-    assert [row.full_name for row in report.rows] == ["acme/api"]
-    assert report.rows[0].clone_url == "https://github.example.com/acme/api.git"
-    assert report.scanned == 1
-    assert report.refreshed == 0
-    assert report.cached == 1
+    assert report.results[0].refs_matched == (MAIN,)
+    assert report.results[0].matches == (
+        ContentMatch(refs=(MAIN,), path="src/app.py", start_line=1, end_line=1, content="primary"),
+    )
 
 
-def test_offline_team_scope_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="--team requires the API"):
-        _sweep(_Corpus(), _Resolver(()), tmp_path / "corpus")(
-            _options(
-                SweepQuery(has_files=("README.md",)),
-                scope=RepositoryInventoryScope(teams=(TeamScope(org="acme", slug="ops"),)),
-                sync="off",
-            )
+def test_content_filters_and_modifiers_apply_to_primary_and_constraints(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    for pattern in ("primary", "required"):
+        corpus.grep_map[("acme/api", MAIN, pattern)] = (
+            _hit("README.md", text=pattern, oid=f"{pattern}-readme"),
+            _hit("src/app.py", text=pattern, oid=f"{pattern}-app"),
+            _hit("src/vendor/app.py", text=pattern, oid=f"{pattern}-vendor"),
         )
 
-
-def test_offline_empty_scope_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="corpus has no repos in scope"):
-        _sweep(_Corpus(cached_rows=(_row("other/api"),)), _Resolver(()), tmp_path / "corpus")(
-            _options(
-                SweepQuery(has_files=("README.md",)),
-                scope=RepositoryInventoryScope(orgs=("acme",)),
-                sync="off",
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(
+            _query(
+                ContentQuestion(pattern="primary"),
+                constraints=(ContentConstraint(kind="with_content", pattern="required"),),
+                content_options=ContentOptions(
+                    mode="fixed_strings", ignore_case=True, word_regexp=True
+                ),
+                path_filters=PathFilters(include=("src/**",), exclude=("src/vendor/**",)),
             )
         )
+    )
+
+    assert [match.path for match in report.results[0].matches] == ["src/app.py"]
+    assert corpus.grep_calls == [
+        ("acme/api", MAIN, "primary", True, True, True),
+        ("acme/api", MAIN, "required", True, True, True),
+    ]
 
 
-def test_auto_sync_refreshes_only_stale_or_underprofiled(tmp_path: Path) -> None:
-    now = datetime.now(UTC)
+def test_content_grouping_keeps_distinct_content_and_canonical_ref_collisions(
+    tmp_path: Path,
+) -> None:
+    corpus = _Corpus()
+    corpus.local_ref_map["acme/api"] = (MAIN, BRANCH, TAG)
+    corpus.grep_map[("acme/api", MAIN, "needle")] = (
+        _hit("app.py", line=3, text="same", oid="same-oid"),
+    )
+    corpus.grep_map[("acme/api", BRANCH, "needle")] = (
+        _hit("app.py", line=3, text="same", oid="same-oid"),
+    )
+    corpus.grep_map[("acme/api", TAG, "needle")] = (
+        _hit("app.py", line=3, text="different", oid="tag-oid"),
+    )
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(ContentQuestion(pattern="needle"), refs=RefSelector(profile="all")))
+    )
+
+    assert report.results[0].refs_matched == (MAIN, BRANCH, TAG)
+    assert report.results[0].matches == (
+        ContentMatch(refs=(TAG,), path="app.py", start_line=3, end_line=3, content="different"),
+        ContentMatch(refs=(MAIN, BRANCH), path="app.py", start_line=3, end_line=3, content="same"),
+    )
+
+
+def test_path_evidence_groups_only_by_path_across_canonical_refs(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.local_ref_map["acme/api"] = (BRANCH, TAG)
+    corpus.tree_map[("acme/api", BRANCH)] = ("Jenkinsfile",)
+    corpus.tree_map[("acme/api", TAG)] = ("Jenkinsfile",)
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(PathQuestion(pattern="Jenkinsfile"), refs=RefSelector(profile="all")))
+    )
+
+    assert report.results[0].matches == (PathMatch(refs=(BRANCH, TAG), path="Jenkinsfile"),)
+
+
+def test_context_clips_boundaries_and_reads_each_primary_blob_once(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.grep_map[("acme/api", MAIN, "needle")] = (
+        _hit("app.py", line=1, text="one", oid="shared"),
+        _hit("app.py", line=4, text="four", oid="shared"),
+    )
+    corpus.blob_map[("acme/api", MAIN, "app.py")] = "one\ntwo\nthree\nfour\nfive"
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(ContentQuestion(pattern="needle"), context=2))
+    )
+
+    first, second = report.results[0].matches
+    assert isinstance(first, ContentMatch)
+    assert first.context is not None
+    assert first.context.to_dict() == {"start_line": 1, "end_line": 3, "content": "one\ntwo\nthree"}
+    assert isinstance(second, ContentMatch)
+    assert second.context is not None
+    assert second.context.to_dict() == {
+        "start_line": 2,
+        "end_line": 5,
+        "content": "two\nthree\nfour\nfive",
+    }
+    assert corpus.read_calls.count(("acme/api", MAIN, "app.py")) == 1
+
+
+def test_context_is_read_only_after_the_ref_qualifies(tmp_path: Path) -> None:
+    corpus = _Corpus()
+    corpus.local_ref_map["acme/api"] = (MAIN, BRANCH)
+    corpus.grep_map[("acme/api", MAIN, "primary")] = (
+        _hit("rejected.py", text="primary", oid="rejected"),
+    )
+    corpus.grep_map[("acme/api", BRANCH, "primary")] = (
+        _hit("accepted.py", text="primary", oid="accepted"),
+    )
+    corpus.grep_map[("acme/api", MAIN, "forbidden")] = (
+        _hit("witness.py", text="forbidden", oid="witness"),
+    )
+    corpus.blob_map[("acme/api", BRANCH, "accepted.py")] = "before\nprimary\nafter"
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(
+            _query(
+                ContentQuestion(pattern="primary"),
+                constraints=(ContentConstraint(kind="without_content", pattern="forbidden"),),
+                context=1,
+            )
+        )
+    )
+
+    assert report.results[0].refs_matched == (BRANCH,)
+    assert ("acme/api", MAIN, "rejected.py") not in corpus.read_calls
+    assert corpus.read_calls.count(("acme/api", BRANCH, "accepted.py")) == 1
+
+
+def test_codeowners_are_resolved_per_qualifying_ref_from_primary_paths_only(
+    tmp_path: Path,
+) -> None:
+    corpus = _Corpus()
+    corpus.local_ref_map["acme/api"] = (MAIN, TAG)
+    for ref in (MAIN, TAG):
+        corpus.grep_map[("acme/api", ref, "primary")] = (
+            _hit("src/app.py", text="primary", oid=f"primary-{ref}"),
+        )
+        corpus.grep_map[("acme/api", ref, "required")] = (
+            _hit("constraint/witness.py", text="required", oid=f"constraint-{ref}"),
+        )
+    corpus.blob_map[("acme/api", MAIN, ".github/CODEOWNERS")] = (
+        "src/ @main-primary\nconstraint/ @constraint-owner\n"
+    )
+    corpus.blob_map[("acme/api", TAG, ".github/CODEOWNERS")] = (
+        "src/ @tag-primary\nconstraint/ @constraint-owner\n"
+    )
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(
+            _query(
+                ContentQuestion(pattern="primary"),
+                constraints=(ContentConstraint(kind="with_content", pattern="required"),),
+                refs=RefSelector(profile="all"),
+            )
+        )
+    )
+
+    assert report.results[0].owners == ("@main-primary", "@tag-primary")
+    assert "@constraint-owner" not in report.results[0].owners
+    assert ("acme/api", MAIN, ".github/CODEOWNERS") in corpus.read_calls
+    assert ("acme/api", TAG, ".github/CODEOWNERS") in corpus.read_calls
+
+
+def test_prepare_scan_failures_cache_fallback_and_summary_invariants(tmp_path: Path) -> None:
+    stale = FETCHED_AT - timedelta(hours=2)
     corpus = _Corpus(
         freshness={
-            "acme/fresh": CorpusFreshness(fetched_at=now, profile="branches"),
-            "acme/stale": CorpusFreshness(
-                fetched_at=now - timedelta(seconds=7200), profile="branches"
-            ),
-            "acme/under": CorpusFreshness(fetched_at=now, profile="default"),
-        }
+            "acme/fallback": CorpusFreshness(fetched_at=stale, profile="default"),
+        },
+        sync_failures={
+            "acme/fallback": "fallback fetch failed",
+            "acme/prepare": "initial fetch failed",
+        },
     )
-    for name in ("acme/fresh", "acme/stale", "acme/under", "acme/new"):
-        corpus.tree_map[(name, "main")] = ("README.md",)
+    corpus.local_ref_failures["acme/scan"] = "corrupt ref store"
+    corpus.tree_map[("acme/matched", MAIN)] = ("README.md",)
+    corpus.tree_map[("acme/fallback", MAIN)] = ()
     resolver = _Resolver(
-        tuple(_item(name) for name in ("acme/fresh", "acme/new", "acme/stale", "acme/under"))
+        tuple(
+            _item(name) for name in ("acme/scan", "acme/matched", "acme/prepare", "acme/fallback")
+        )
     )
 
     report = _sweep(corpus, resolver, tmp_path / "corpus")(
         _options(
-            SweepQuery(has_files=("README.md",), refs=RefSelector(profile="branches")),
-            scope=RepositoryInventoryScope(orgs=("acme",)),
+            _query(
+                PathQuestion(pattern="README.md"),
+                scope=SweepScope(orgs=("acme",)),
+                freshness="refresh",
+            )
         )
     )
 
-    assert [synced.repo for synced in corpus.synced] == [
-        "acme/new",
-        "acme/stale",
-        "acme/under",
+    assert [result.full_name for result in report.results] == ["acme/matched"]
+    assert [(failure.full_name, failure.stage) for failure in report.failures] == [
+        ("acme/prepare", "prepare"),
+        ("acme/scan", "scan"),
     ]
-    assert report.scanned == 4
-    assert report.refreshed == 3
-    assert report.cached == 1
+    assert report.summary.to_dict() == {
+        "selected": 4,
+        "prepared": 3,
+        "scanned": 2,
+        "matched": 1,
+        "unscanned": 2,
+        "refreshed": 2,
+        "cached": 1,
+        "oldest_fetched_at": stale.isoformat(),
+    }
 
 
-def test_failed_refresh_with_covering_cache_scans_cached(tmp_path: Path) -> None:
+def test_cached_scope_requires_covering_metadata_without_network_calls(tmp_path: Path) -> None:
+    corpus = _Corpus(
+        cached_rows=(
+            _row("acme/covered", profile="all"),
+            _row("acme/under", profile="default"),
+        ),
+        freshness={
+            "acme/covered": CorpusFreshness(fetched_at=FETCHED_AT, profile="all"),
+            "acme/under": CorpusFreshness(fetched_at=FETCHED_AT, profile="default"),
+        },
+    )
+    corpus.tree_map[("acme/covered", MAIN)] = ("README.md",)
+    resolver = _Resolver(())
+
+    report = _sweep(corpus, resolver, tmp_path / "corpus")(
+        _options(
+            _query(
+                PathQuestion(pattern="README.md"),
+                scope=SweepScope(orgs=("acme",)),
+                refs=RefSelector(profile="branches"),
+                freshness="cached",
+            )
+        )
+    )
+
+    assert [result.full_name for result in report.results] == ["acme/covered"]
+    assert [(failure.full_name, failure.stage) for failure in report.failures] == [
+        ("acme/under", "prepare")
+    ]
+    assert resolver.scopes == []
+    assert corpus.synced == []
+
+
+def test_cached_scope_is_additive_and_missing_explicit_repos_are_prepare_failures(
+    tmp_path: Path,
+) -> None:
+    names = ("acme/from-org", "other/explicit", "other/unselected")
+    corpus = _Corpus(
+        cached_rows=tuple(_row(name, profile="all") for name in names),
+        freshness={name: CorpusFreshness(fetched_at=FETCHED_AT, profile="all") for name in names},
+    )
+    corpus.tree_map[("acme/from-org", MAIN)] = ("README.md",)
+    corpus.tree_map[("other/explicit", MAIN)] = ("README.md",)
+
+    report = _sweep(corpus, _Resolver(()), tmp_path / "corpus")(
+        _options(
+            _query(
+                PathQuestion(pattern="README.md"),
+                scope=SweepScope(orgs=("acme",), repos=("other/explicit", "other/missing")),
+                freshness="cached",
+            )
+        )
+    )
+
+    assert [result.full_name for result in report.results] == [
+        "acme/from-org",
+        "other/explicit",
+    ]
+    assert [(failure.full_name, failure.stage) for failure in report.failures] == [
+        ("other/missing", "prepare")
+    ]
+    assert report.summary.selected == 3
+
+
+def test_cached_team_scope_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="--team requires the API"):
+        _sweep(_Corpus(), _Resolver(()), tmp_path / "corpus")(
+            _options(
+                _query(
+                    PathQuestion(pattern="README.md"),
+                    scope=SweepScope(teams=("acme/platform",)),
+                    freshness="cached",
+                )
+            )
+        )
+
+
+def test_operational_config_values_drive_refresh_depth_age_and_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from untaped_github.application import sweep as sweep_module
+
+    observed_concurrency: list[int] = []
+
+    def recording_map(
+        function: object,
+        items: object,
+        *,
+        concurrency: int,
+        on_each: object,
+    ) -> None:
+        observed_concurrency.append(concurrency)
+        for item in items:  # type: ignore[union-attr]
+            on_each(item, function(item))  # type: ignore[operator]
+
+    monkeypatch.setattr(sweep_module, "bounded_map", recording_map)
     corpus = _Corpus(
         freshness={
-            "acme/api": CorpusFreshness(fetched_at=datetime.now(UTC), profile="default"),
-        },
-        sync_failures={"acme/api": "fetch denied"},
+            "acme/api": CorpusFreshness(
+                fetched_at=datetime.now(UTC) - timedelta(seconds=10), profile="default"
+            )
+        }
     )
-    corpus.tree_map[("acme/api", "main")] = ("README.md",)
+    corpus.tree_map[("acme/api", MAIN)] = ("README.md",)
 
     report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
         _options(
-            SweepQuery(has_files=("README.md",)),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-            sync="force",
+            _query(PathQuestion(pattern="README.md")),
+            fetch_depth=0,
+            sync_concurrency=7,
+            max_age_seconds=5,
         )
     )
 
-    assert [row.full_name for row in report.rows] == ["acme/api"]
-    assert report.unscanned == ()
-    assert report.scanned == 1
-    assert report.refreshed == 0
-    assert report.cached == 1
-
-
-def test_failed_refresh_without_cache_is_unscanned(tmp_path: Path) -> None:
-    corpus = _Corpus(sync_failures={"acme/api": "fetch denied"})
-
-    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
-        _options(
-            SweepQuery(has_files=("README.md",)),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-            sync="force",
-        )
-    )
-
-    assert report.rows == ()
-    assert report.unscanned == (CorpusFailure(repo="acme/api", reason="fetch denied"),)
-    assert report.scanned == 0
-
-
-def test_repo_matches_when_any_ref_matches(tmp_path: Path) -> None:
-    corpus = _Corpus()
-    corpus.local_ref_map["acme/api"] = ("main", "release/1")
-    corpus.tree_map[("acme/api", "release/1")] = ("README.md",)
-
-    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
-        _options(
-            SweepQuery(has_files=("README.md",), refs=RefSelector(globs=("release/*",))),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-        )
-    )
-
-    assert report.rows[0].refs_matched == ("release/1",)
-    assert report.rows[0].clone_url == "https://github.example.com/acme/api.git"
-
-
-def test_identical_blob_across_refs_yields_one_match_row(tmp_path: Path) -> None:
-    corpus = _Corpus()
-    corpus.local_ref_map["acme/api"] = ("main", "release/1")
-    corpus.grep_map[("acme/api", "main", "needle")] = (
-        GrepHit(path="app.py", line=3, text="needle()", blob_oid="abc123"),
-    )
-    corpus.grep_map[("acme/api", "release/1", "needle")] = (
-        GrepHit(path="app.py", line=3, text="needle()", blob_oid="abc123"),
-    )
-
-    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
-        _options(
-            SweepQuery(greps=("needle",), refs=RefSelector(globs=("release/*",))),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-        )
-    )
-
-    assert len(report.matches) == 1
-    assert report.matches[0].full_name == "acme/api"
-    assert report.matches[0].refs == ("main", "release/1")
-    assert report.matches[0].path == "app.py"
-
-
-def test_owners_from_matched_paths(tmp_path: Path) -> None:
-    corpus = _Corpus()
-    corpus.grep_map[("acme/api", "main", "needle")] = (
-        GrepHit(path="src/app.py", line=1, text="needle()", blob_oid="abc123"),
-    )
-    corpus.tree_map[("acme/api", "main")] = ("src/app.yml",)
-    corpus.blob_map[("acme/api", "main", ".github/CODEOWNERS")] = "* @all\nsrc/ @src\n*.py @py\n"
-
-    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
-        _options(
-            SweepQuery(greps=("needle",), has_files=("src/*.yml",)),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-        )
-    )
-
-    assert report.rows[0].owners == ("@py", "@src")
-
-
-def test_pathless_match_uses_default_owners(tmp_path: Path) -> None:
-    corpus = _Corpus()
-    corpus.blob_map[("acme/api", "main", ".github/CODEOWNERS")] = "* @all\n"
-
-    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
-        _options(
-            SweepQuery(not_greps=("needle",)),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-        )
-    )
-
-    assert report.rows[0].owners == ("@all",)
-
-
-def test_missing_codeowners_is_empty(tmp_path: Path) -> None:
-    corpus = _Corpus()
-    corpus.tree_map[("acme/api", "main")] = ("README.md",)
-
-    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
-        _options(
-            SweepQuery(has_files=("README.md",)),
-            scope=RepositoryInventoryScope(repos=("acme/api",)),
-        )
-    )
-
-    assert report.rows[0].owners == ()
-
-
-def test_archived_repos_excluded_by_default(tmp_path: Path) -> None:
-    corpus = _Corpus()
-    corpus.tree_map[("acme/api", "main")] = ("README.md",)
-    corpus.tree_map[("acme/old", "main")] = ("README.md",)
-
-    report = _sweep(
-        corpus,
-        _Resolver((_item("acme/api"), _item("acme/old", archived=True))),
-        tmp_path / "corpus",
-    )(
-        _options(
-            SweepQuery(has_files=("README.md",)),
-            scope=RepositoryInventoryScope(orgs=("acme",)),
-        )
-    )
-
-    assert [synced.repo for synced in corpus.synced] == ["acme/api"]
-    assert [row.full_name for row in report.rows] == ["acme/api"]
+    assert report.summary.refreshed == 1
+    assert corpus.synced[0].depth == 0
+    assert observed_concurrency == [7, 7]
