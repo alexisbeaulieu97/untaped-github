@@ -100,7 +100,6 @@ class GitCorpus(Protocol):
         root: Path,
         ref: str,
         pattern: str,
-        paths: tuple[str, ...],
         ignore_case: bool,
         fixed_strings: bool,
         word_regexp: bool,
@@ -122,7 +121,6 @@ class GitCorpus(Protocol):
         *,
         root: Path,
         pattern: str,
-        paths: tuple[str, ...],
         fixed_strings: bool,
     ) -> str | None: ...
 

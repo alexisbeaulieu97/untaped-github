@@ -220,7 +220,6 @@ def _validate_content_patterns(
     settings: GithubSettings,
     query: SweepQuery,
 ) -> None:
-    paths = query.paths
     fixed_strings = query.fixed_strings
     for flag, pattern in (
         *[("--grep", pattern) for pattern in query.greps],
@@ -229,19 +228,11 @@ def _validate_content_patterns(
         error = corpus.validate_pattern(
             root=settings.corpus_path,
             pattern=pattern,
-            paths=paths,
             fixed_strings=fixed_strings,
         )
         if error is None:
             continue
-        path = _path_from_error(paths, error)
-        if path is not None:
-            raise ConfigError(f"--path {path!r}: {error}")
         raise ConfigError(f"{flag} {pattern!r}: {error}")
-
-
-def _path_from_error(paths: tuple[str, ...], error: str) -> str | None:
-    return next((path for path in paths if path in error), None)
 
 
 def _parallel(value: int) -> int:

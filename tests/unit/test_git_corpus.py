@@ -89,7 +89,6 @@ def _grep_main(
         root=root,
         ref="main",
         pattern=pattern,
-        paths=(),
         ignore_case=False,
         fixed_strings=False,
         word_regexp=False,
@@ -248,7 +247,6 @@ def test_grep_hits_carry_blob_oid_shared_across_refs(tmp_path: Path) -> None:
         root=root,
         ref="main",
         pattern="acme/action",
-        paths=(),
         ignore_case=False,
         fixed_strings=False,
         word_regexp=False,
@@ -258,7 +256,6 @@ def test_grep_hits_carry_blob_oid_shared_across_refs(tmp_path: Path) -> None:
         root=root,
         ref="release/1",
         pattern="acme/action",
-        paths=(),
         ignore_case=False,
         fixed_strings=False,
         word_regexp=False,
@@ -296,7 +293,6 @@ def test_grep_no_match_vs_invalid_pattern(tmp_path: Path) -> None:
             root=root,
             ref="main",
             pattern="acme/action",
-            paths=(),
             ignore_case=False,
             fixed_strings=False,
             word_regexp=False,
@@ -309,14 +305,13 @@ def test_grep_no_match_vs_invalid_pattern(tmp_path: Path) -> None:
             root=root,
             ref="main",
             pattern="[",
-            paths=(),
             ignore_case=False,
             fixed_strings=False,
             word_regexp=False,
         )
 
 
-def test_local_refs_default_first_then_sorted(tmp_path: Path) -> None:
+def test_local_refs_are_canonical_default_first_then_sorted(tmp_path: Path) -> None:
     source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
     _git(source, "checkout", "-q", "-b", "zeta")
     _commit_file(source, "zeta.txt", "zeta\n", "zeta")
@@ -338,13 +333,37 @@ def test_local_refs_default_first_then_sorted(tmp_path: Path) -> None:
     )
 
     assert cache.local_refs(repo, root=root, selector=RefSelector(profile="branches")) == (
-        "main",
-        "alpha",
-        "zeta",
+        "refs/heads/main",
+        "refs/heads/alpha",
+        "refs/heads/zeta",
     )
     assert cache.local_refs(repo, root=root, selector=RefSelector(globs=("v*",))) == (
-        "main",
-        "v2.0",
+        "refs/heads/main",
+        "refs/tags/v2.0",
+    )
+
+
+def test_local_refs_preserve_same_named_branch_and_tag(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "checkout", "-q", "-b", "release/1")
+    _commit_file(source, "release.txt", "branch\n", "branch")
+    _git(source, "tag", "release/1")
+    _git(source, "checkout", "-q", "main")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="all"),
+        depth=1,
+        auth_header=None,
+    )
+
+    assert cache.local_refs(repo, root=root, selector=RefSelector(profile="all")) == (
+        "refs/heads/main",
+        "refs/heads/release/1",
+        "refs/tags/release/1",
     )
 
 
@@ -383,17 +402,63 @@ def test_validate_pattern_flags_invalid_regex(tmp_path: Path) -> None:
     cache = GitCorpusCache()
 
     assert (
-        cache.validate_pattern(
-            root=tmp_path / "corpus", pattern="acme/action", paths=(), fixed_strings=False
-        )
+        cache.validate_pattern(root=tmp_path / "corpus", pattern="acme/action", fixed_strings=False)
         is None
     )
     assert cache.validate_pattern(
         root=tmp_path / "corpus",
         pattern="[",
-        paths=(),
         fixed_strings=False,
     )
+
+
+def test_grep_forces_extended_regex_despite_hostile_git_config(tmp_path: Path) -> None:
+    source = _source_repo(
+        tmp_path,
+        "source",
+        {"README.md": "alpha\nbeta\ngamma\n"},
+    )
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    synced = _sync_default(cache, repo, root=root)
+    _git(Path(synced.path), "config", "grep.patternType", "fixed")
+
+    hits = cache.grep_ref(
+        repo,
+        root=root,
+        ref="refs/heads/main",
+        pattern="alpha|beta",
+        ignore_case=False,
+        fixed_strings=False,
+        word_regexp=False,
+    )
+
+    assert [(hit.line, hit.text) for hit in hits] == [(1, "alpha"), (2, "beta")]
+
+
+def test_grep_content_modifiers_are_invocation_wide(tmp_path: Path) -> None:
+    source = _source_repo(
+        tmp_path,
+        "source",
+        {"README.md": "FOO.BAR\nfooXbar\nprefoo.barpost\n"},
+    )
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    _sync_default(cache, repo, root=root)
+
+    hits = cache.grep_ref(
+        repo,
+        root=root,
+        ref="refs/heads/main",
+        pattern="foo.bar",
+        ignore_case=True,
+        fixed_strings=True,
+        word_regexp=True,
+    )
+
+    assert [(hit.line, hit.text) for hit in hits] == [(1, "FOO.BAR")]
 
 
 def test_sync_fetches_blobful_default_branch_and_grep_parses_hits(tmp_path: Path) -> None:
@@ -467,7 +532,6 @@ def test_grep_exit_above_one_is_failure(tmp_path: Path) -> None:
             root=root,
             ref="main",
             pattern="[",
-            paths=(),
             ignore_case=False,
             fixed_strings=False,
             word_regexp=False,
@@ -526,7 +590,6 @@ def test_grep_malformed_output_is_git_corpus_error(
             root=root,
             ref="main",
             pattern="acme/action",
-            paths=(),
             ignore_case=False,
             fixed_strings=False,
             word_regexp=False,

@@ -346,7 +346,6 @@ class Sweep:
             root=self._root,
             ref=ref,
             pattern=pattern,
-            paths=query.paths,
             ignore_case=query.ignore_case,
             fixed_strings=query.fixed_strings,
             word_regexp=query.word_regexp,

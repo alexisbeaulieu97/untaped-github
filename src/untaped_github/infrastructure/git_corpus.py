@@ -158,7 +158,7 @@ class GitCorpusCache:
             ),
         )
         refs = (
-            _short_ref(ref)
+            ref
             for ref in (result.stdout or "").splitlines()
             if _selector_covers_ref(selector, ref, default_branch=branch)
         )
@@ -171,7 +171,6 @@ class GitCorpusCache:
         root: Path,
         ref: str,
         pattern: str,
-        paths: tuple[str, ...],
         ignore_case: bool,
         fixed_strings: bool,
         word_regexp: bool,
@@ -183,10 +182,11 @@ class GitCorpusCache:
             args.append("--ignore-case")
         if fixed_strings:
             args.append("--fixed-strings")
+        else:
+            args.append("--extended-regexp")
         if word_regexp:
             args.append("--word-regexp")
-        args.extend(["-e", pattern, ref, "--"])
-        args.extend(paths)
+        args.extend(["-e", pattern, ref])
         result = cast(
             subprocess.CompletedProcess[bytes],
             self._run(args, cwd=bare, capture_bytes=True, check=False),
@@ -241,10 +241,9 @@ class GitCorpusCache:
         *,
         root: Path,
         pattern: str,
-        paths: tuple[str, ...],
         fixed_strings: bool,
     ) -> str | None:
-        """Validate one grep pattern and its pathspecs in a scratch repository."""
+        """Validate one grep pattern in a scratch repository."""
         managed_root = root.expanduser()
         managed_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".validate-", dir=managed_root) as scratch:
@@ -253,8 +252,9 @@ class GitCorpusCache:
             args = ["grep", "-n"]
             if fixed_strings:
                 args.append("--fixed-strings")
-            args.extend(["-e", pattern, "--"])
-            args.extend(paths)
+            else:
+                args.append("--extended-regexp")
+            args.extend(["-e", pattern])
             result = cast(
                 subprocess.CompletedProcess[str],
                 self._run(args, cwd=scratch_path, capture_text=True, check=False),
@@ -598,18 +598,11 @@ def _selector_covers_ref(selector: RefSelector, ref: str, *, default_branch: str
     return any(fnmatch.fnmatchcase(name, glob) for glob in selector.globs)
 
 
-def _short_ref(ref: str) -> str:
-    if ref.startswith("refs/heads/"):
-        return ref.removeprefix("refs/heads/")
-    if ref.startswith("refs/tags/"):
-        return ref.removeprefix("refs/tags/")
-    return ref
-
-
 def _order_refs(refs: tuple[str, ...], *, default_branch: str) -> tuple[str, ...]:
-    ordered = sorted(ref for ref in refs if ref != default_branch)
-    if default_branch in refs:
-        return (default_branch, *ordered)
+    default_ref = f"refs/heads/{default_branch}"
+    ordered = sorted(ref for ref in refs if ref != default_ref)
+    if default_ref in refs:
+        return (default_ref, *ordered)
     return tuple(ordered)
 
 

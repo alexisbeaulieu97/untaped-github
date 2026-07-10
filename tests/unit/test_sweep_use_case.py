@@ -149,7 +149,6 @@ class _Corpus:
         root: Path,
         ref: str,
         pattern: str,
-        paths: tuple[str, ...],
         ignore_case: bool,
         fixed_strings: bool,
         word_regexp: bool,
