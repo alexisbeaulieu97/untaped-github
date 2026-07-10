@@ -76,23 +76,40 @@ under hostile Git configuration and across the primary, constraints, and
 filters. One path implementation also prevents `sweep paths` and content path
 filters from drifting into subtly different glob languages.
 
-## 5. A sweep produces one self-contained evidence report
+## 5. A sweep has one complete report model with explicit output projections
 
 JSON and YAML serialize one `{query, results, failures, summary}` report.
 Each result contains the repository, canonical matched refs, primary matches,
 owners, and freshness. Failures retain their `prepare` or `scan` stage, and the
-summary retains selection and coverage accounting.
+summary retains selection and coverage accounting. A JSON/YAML column
+projection always retains `full_name` and `refs_matched` for result identity,
+while query, failures, and summary remain complete.
 
 Table output has one row per primary match. Raw output keeps one repository row
 so it can feed other tools without accidental duplicates. Pipe output emits
 complete `github.sweep_result` records and ignores `--columns`; a projection
 must never make a record unusable as the scope for another sweep. This replaces
 the old `--show repos|matches` split and the separate `github.sweep_repo` and
-`github.sweep_match` kinds.
+`github.sweep_match` kinds. Table projection always keeps repository and ref
+identity. Raw columns are intentionally lossy and custom.
 
-CODEOWNERS is resolved on each qualifying ref and only for primary evidence
-paths. Constraint witnesses do not affect owners. Owners therefore describe
-the evidence a reader can see, rather than hidden predicates used to select it.
+Raw and pipe stdout remain matching-result projections, not archival reports.
+Every run writes its summary and each unscanned failure to stderr, including an
+otherwise empty, successful raw/pipe run. JSON/YAML are the archival formats.
+This split keeps pipelines data-only without hiding coverage from the operator;
+`--require-complete` is the explicit machine gate for any unscanned repository.
+
+CODEOWNERS is resolved per qualifying ref and primary-evidence path. The result
+stores a lexically sorted owner union, and table output repeats that union on
+each match row. This intentionally favors a concise "who do I ping?" result
+over a ref/path provenance mapping. Constraint witnesses do not affect owners.
+
+Requested scope lists, constraints, filters, and ref globs preserve CLI order.
+Results and failures sort by `full_name`; canonical refs and owners sort
+lexically; matches sort by kind, path, start line, end line, and content (with
+inapplicable fields omitted for path matches); context remains in source-line
+order. Stable ordering makes reports reproducible while preserving the user's
+stated query.
 
 ## 6. Canonical refs survive selection, evaluation, grouping, and reporting
 

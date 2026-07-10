@@ -237,8 +237,11 @@ CODEOWNERS is read from each qualifying canonical ref. Owners are resolved only
 for paths in retained **primary evidence**, using last-match-wins semantics.
 Constraint witnesses never contribute owners. Missing CODEOWNERS produces an
 empty owner set rather than a failure. Result-level `owners` is the stable,
-deduplicated aggregation of owners attached to its qualifying primary
-evidence.
+deduplicated, lexically sorted union of owners resolved per qualifying ref and
+primary-evidence path. Table output repeats that result-level union on every
+primary-match row for the repository. This is intentionally not a ref/path
+ownership-provenance mapping; callers that need that distinction must resolve
+CODEOWNERS against the referenced evidence themselves.
 
 There is no public owner toggle. Owner resolution is local and makes no GitHub
 Teams API calls.
@@ -376,24 +379,55 @@ The invariants are:
 - `oldest_fetched_at` is the oldest timestamp among prepared repositories, or
   null when none were prepared.
 
+### Deterministic ordering
+
+Ordering is part of the serialized contract:
+
+- requested scope lists (`orgs`, `teams`, and `repos`), constraints, path
+  filters, and explicit ref globs preserve CLI order;
+- `results` and `failures` sort lexically by `full_name`;
+- canonical ref arrays and owner arrays sort lexically and are deduplicated;
+- matches sort by `kind`, `path`, `start_line`, `end_line`, then `content`;
+  path matches omit the inapplicable line and content keys from that sort; and
+- context preserves repository source-line order.
+
+These rules make equivalent runs diffable without erasing the order in which
+the user stated the question.
+
 ## Rendering contracts
 
-- **JSON/YAML:** serialize the self-contained top-level
-  `{query, results, failures, summary}` object. Selecting columns may project
-  result fields, but must not discard query, failure, or summary coverage
-  metadata.
+Every format writes the summary and every unscanned failure to stderr. This is
+intentional even when JSON/YAML also carry that information on stdout: status
+remains visible beside redirected or piped result data.
+
+- **JSON/YAML:** serialize the archival, self-contained top-level
+  `{query, results, failures, summary}` object. Without `--columns`, every
+  result is complete. With `--columns`, the wrapper remains the same,
+  `query`/`failures`/`summary` remain complete, and every projected result
+  retains mandatory `full_name` and `refs_matched` identity fields in addition
+  to the selected optional fields.
 - **Table:** one row per primary match. Content rows show repo, canonical refs,
   path, line range, content, optional context, and owners. Path rows show repo,
-  canonical refs, path, and owners. Failures and summary remain visible outside
-  the rows.
+  canonical refs, path, and owners. Column selection always retains repo and
+  canonical-ref identity. The same sorted result-level owner union is repeated
+  on every match row. Failures and summary remain visible on stderr.
 - **Raw:** without `--columns`, emit each matched `full_name` once. With
   columns, emit one row per matching repository; nested match selections are
   ordered arrays so a repository is never duplicated merely because it has
-  several matches.
+  several matches. Raw columns are intentionally a lossy, custom projection;
+  unlike JSON/YAML, raw does not force identity or coverage fields into a
+  requested projection.
 - **Pipe:** emit one complete record per result with
   `kind="github.sweep_result"` and `id_field="full_name"`. Pipe records contain
   the full result object. `--columns` is ignored so downstream sweeps always
   receive a complete, stable record.
+
+Raw and pipe stdout contain matching-result projections only: they do not
+serialize failures or the summary and are not archival reports. An empty
+raw/pipe stdout with exit `0` is intentional for both a clean no-match run and
+a partial run with no matches; stderr distinguishes them through the mandatory
+summary and failure lines. `--require-complete` additionally promotes any
+unscanned repository to exit `1`.
 
 `--columns ?` lists the exact valid selectors: `full_name`, `clone_url`,
 `refs_matched`, `matches.kind`, `matches.refs`, `matches.path`,
