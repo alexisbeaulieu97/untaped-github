@@ -266,13 +266,15 @@ REST inventory only to resolve scopes, then fetch and evaluate locally.
   `--filter=blob:none` because `git grep <ref>` needs blobs present locally.
   Fetch profiles are `default`, `branches`, `tags`, and `all`, with additional
   `--ref` globs unioned in. Corpus metadata records the fetched profile,
-  ref globs, clone URL, and archived bit; profiles only widen and never
-  narrow.
+  ref globs, default branch, clone URL, and archived bit; profiles only widen
+  and never narrow while default-branch identity matches. Every selector
+  requires the cached canonical `refs/heads/<default_branch>` to exist.
 - Online sweeps refresh uncached, stale, or under-profiled repos; `--refresh`
   forces preparation and `--cached` makes no network calls. A failed refresh
-  may fall back to a covering cache; otherwise it is a declared `prepare`
-  failure. Scan errors are declared separately. Summary and failures always
-  go to stderr, including for raw and pipe output.
+  may fall back to a covering cache, but never across a default-branch
+  mismatch; otherwise it is a declared `prepare` failure. Scan errors,
+  including a missing canonical default ref, are declared separately. Summary
+  and failures always go to stderr, including for raw and pipe output.
 - JSON/YAML serialize the self-contained `{query, results, failures, summary}`
   report. Table is one row per primary match. Raw is one row per matching repo.
   Pipe emits one complete `github.sweep_result` per repo and ignores columns.

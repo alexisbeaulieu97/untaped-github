@@ -210,6 +210,14 @@ The freshness controls are:
 - `--cached`: make no network calls and use only corpus state that covers the
   requested refs.
 
+Coverage includes default-branch identity: metadata fetched for an earlier
+default branch does not cover a live inventory target whose default branch has
+changed. Default mode refreshes that repository, cached mode declares a
+`prepare` failure, and a failed refresh cannot fall back to the mismatched
+cache. Every selector also requires the cached canonical
+`refs/heads/<default_branch>` to exist; a missing canonical ref is a `scan`
+failure even when another branch or tag remains.
+
 `--refresh` and `--cached` are mutually exclusive. If a refresh fails but an
 existing cache covers the requested selector, the repository is scanned from
 cache. Otherwise it becomes a `prepare` failure. A scan error becomes a `scan`

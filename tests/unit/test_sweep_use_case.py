@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -138,7 +138,12 @@ class _Corpus:
         sync_failures: dict[str, str] | None = None,
     ) -> None:
         self.cached_rows = cached_rows
-        self.freshness = freshness or {}
+        self.freshness = {
+            name: value
+            if value.default_branch is not None
+            else replace(value, default_branch="main")
+            for name, value in (freshness or {}).items()
+        }
         self.freshness_failures = freshness_failures or {}
         self.sync_failures = sync_failures or {}
         self.validation_errors: dict[str, str] = {}
@@ -168,6 +173,7 @@ class _Corpus:
         self.freshness[repo.full_name] = CorpusFreshness(
             fetched_at=FETCHED_AT,
             profile=selector.profile,
+            default_branch=repo.default_branch,
             ref_globs=selector.globs,
             archived=repo.archived,
         )
@@ -670,6 +676,77 @@ def test_cached_scope_requires_covering_metadata_without_network_calls(tmp_path:
     ]
     assert resolver.scopes == []
     assert corpus.synced == []
+
+
+def test_cached_scope_rejects_metadata_for_a_different_default_branch(tmp_path: Path) -> None:
+    corpus = _Corpus(
+        cached_rows=(_row("acme/api", ref="main"),),
+        freshness={
+            "acme/api": CorpusFreshness(
+                fetched_at=FETCHED_AT,
+                profile="default",
+                default_branch="master",
+            )
+        },
+    )
+
+    report = _sweep(corpus, _Resolver(()), tmp_path / "corpus")(
+        _options(
+            _query(
+                PathQuestion(pattern="README.md"),
+                scope=SweepScope(repos=("acme/api",)),
+                freshness="cached",
+            )
+        )
+    )
+
+    assert report.results == ()
+    assert report.failures == (
+        SweepFailure("acme/api", "prepare", "cached corpus does not cover the selected refs"),
+    )
+    assert corpus.synced == []
+
+
+def test_auto_refreshes_cache_when_inventory_default_branch_changed(tmp_path: Path) -> None:
+    corpus = _Corpus(
+        freshness={
+            "acme/api": CorpusFreshness(
+                fetched_at=datetime.now(UTC),
+                profile="default",
+                default_branch="master",
+            )
+        }
+    )
+    corpus.tree_map[("acme/api", MAIN)] = ("README.md",)
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(PathQuestion(pattern="README.md")))
+    )
+
+    assert report.failures == ()
+    assert report.summary.refreshed == 1
+    assert [call.repo for call in corpus.synced] == ["acme/api"]
+
+
+def test_failed_drift_refresh_does_not_fall_back_to_mismatched_branch(tmp_path: Path) -> None:
+    corpus = _Corpus(
+        freshness={
+            "acme/api": CorpusFreshness(
+                fetched_at=FETCHED_AT,
+                profile="default",
+                default_branch="master",
+            )
+        },
+        sync_failures={"acme/api": "fetch failed"},
+    )
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(PathQuestion(pattern="README.md")))
+    )
+
+    assert report.results == ()
+    assert report.failures == (SweepFailure("acme/api", "prepare", "fetch failed"),)
+    assert report.summary.prepared == 0
 
 
 def test_cached_scope_is_additive_and_missing_explicit_repos_are_prepare_failures(

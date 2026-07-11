@@ -243,7 +243,11 @@ class Sweep:
                     reason=str(exc),
                 )
             if options.query.freshness == "cached":
-                if freshness is None or not covers(freshness, options.query.refs):
+                if freshness is None or not covers(
+                    freshness,
+                    options.query.refs,
+                    default_branch=repo.default_branch,
+                ):
                     return SweepFailure(
                         full_name=repo.full_name,
                         stage="prepare",
@@ -254,6 +258,7 @@ class Sweep:
             must_refresh = options.query.freshness == "refresh" or _needs_refresh(
                 freshness,
                 selector=options.query.refs,
+                default_branch=repo.default_branch,
                 max_age_seconds=options.max_age_seconds,
             )
             if not must_refresh:
@@ -270,7 +275,11 @@ class Sweep:
                     auth_header=auth_header,
                 )
             except GitCorpusError as exc:
-                if freshness is not None and covers(freshness, options.query.refs):
+                if freshness is not None and covers(
+                    freshness,
+                    options.query.refs,
+                    default_branch=repo.default_branch,
+                ):
                     return _ReadyRepo(
                         repo=repo,
                         fetched_at=freshness.fetched_at,
@@ -505,9 +514,14 @@ def _needs_refresh(
     freshness: CorpusFreshness | None,
     *,
     selector: RefSelector,
+    default_branch: str | None,
     max_age_seconds: int,
 ) -> bool:
-    if freshness is None or not covers(freshness, selector):
+    if freshness is None or not covers(
+        freshness,
+        selector,
+        default_branch=default_branch,
+    ):
         return True
     return (datetime.now(UTC) - freshness.fetched_at).total_seconds() > max_age_seconds
 

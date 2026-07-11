@@ -126,6 +126,7 @@ def test_v1_metadata_reads_as_default_profile(tmp_path: Path) -> None:
     assert freshness == CorpusFreshness(
         fetched_at=datetime(2026, 7, 6, 12, 0, tzinfo=UTC),
         profile="default",
+        default_branch="main",
         ref_globs=(),
         archived=False,
     )
@@ -265,6 +266,17 @@ def test_covers_selector_containment() -> None:
     assert covers(tags, RefSelector(profile="tags", globs=("v*",)))
     assert not covers(tags, RefSelector(profile="tags", globs=("release/*",)))
     assert covers(all_refs, RefSelector(profile="branches", globs=("release/*",)))
+
+
+def test_covers_requires_cached_and_inventory_default_branches_to_match() -> None:
+    freshness = CorpusFreshness(
+        fetched_at=datetime(2026, 7, 6, tzinfo=UTC),
+        profile="default",
+        default_branch="master",
+    )
+
+    assert covers(freshness, RefSelector(), default_branch="master")
+    assert not covers(freshness, RefSelector(), default_branch="main")
 
 
 def test_grep_hits_carry_blob_oid_shared_across_refs(tmp_path: Path) -> None:
@@ -437,6 +449,55 @@ def test_local_refs_rejects_metadata_without_bare_head(tmp_path: Path) -> None:
     assert report.results == ()
     assert [(failure.stage, failure.reason) for failure in report.failures] == [
         ("scan", "repository is not in the local corpus")
+    ]
+    assert report.summary.unscanned == 1
+
+
+def test_local_refs_rejects_cache_missing_canonical_default_ref(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "tag", "v1.0")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    synced = cache.sync_repo(
+        repo,
+        root=root,
+        selector=RefSelector(profile="tags"),
+        depth=1,
+        auth_header=None,
+    )
+    bare = Path(synced.path)
+    _git(bare, "update-ref", "-d", "refs/heads/main")
+
+    with pytest.raises(
+        GitCorpusError,
+        match=r"cached repository acme/api is missing canonical default ref refs/heads/main",
+    ):
+        cache.local_refs(repo, root=root, selector=RefSelector(profile="tags"))
+
+    report = Sweep(
+        inventory=lambda _scope: (),
+        corpus=cache,
+        root=root,
+        auth_header=lambda: None,
+    )(
+        SweepOptions(
+            query=SweepQuery(
+                scope=SweepScope(repos=("acme/api",)),
+                question=PathQuestion(pattern="README.md"),
+                refs=RefSelector(profile="tags"),
+                freshness="cached",
+            ),
+            sync_concurrency=1,
+        )
+    )
+
+    assert report.results == ()
+    assert [(failure.stage, failure.reason) for failure in report.failures] == [
+        (
+            "scan",
+            "cached repository acme/api is missing canonical default ref refs/heads/main",
+        )
     ]
     assert report.summary.unscanned == 1
 

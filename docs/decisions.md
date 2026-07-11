@@ -153,11 +153,16 @@ bulk dev checkouts remain `untaped-workspace`'s job.
   needs blobs present locally; `--filter=blob:none` is banned, since a blobless
   bare repo degrades into per-blob lazy fetches during grep.
 - **Freshness is scope-bounded auto-sync.** Ordinary sweeps refresh only
-  uncached, stale, or under-profiled repos; `--refresh` forces preparation, and
-  `--cached` reads only what corpus metadata already covers.
+  uncached, stale, or under-profiled repos; a cached default branch that differs
+  from live inventory is under-profiled. `--refresh` forces preparation, and
+  `--cached` reads only what corpus metadata already covers. Failed refreshes
+  cannot fall back across a default-branch mismatch.
 - **Fetch profiles only widen.** Corpus metadata records the fetched profile,
-  ref globs, clone URL, and archived bit. A later narrow sweep can reuse a
-  wider cache.
+  ref globs, default branch, clone URL, and archived bit. A later narrow sweep
+  can reuse a wider cache only while default-branch identity still matches.
+- **Canonical default refs are mandatory.** Every selector includes and
+  requires `refs/heads/<default_branch>` locally. Missing that ref is a declared
+  scan failure even if another cached branch or tag survives.
 
 The cache stores repository *content*, not scope *membership*: there is no
 inventory-cache layer. Online runs resolve scopes live; `--cached` falls back

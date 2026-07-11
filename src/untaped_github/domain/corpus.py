@@ -33,6 +33,7 @@ class CorpusFreshness:
 
     fetched_at: datetime
     profile: RefProfile
+    default_branch: str | None = None
     ref_globs: tuple[str, ...] = ()
     archived: bool = False
 
@@ -47,8 +48,16 @@ class GrepHit:
     blob_oid: str
 
 
-def covers(freshness: CorpusFreshness, selector: RefSelector) -> bool:
+def covers(
+    freshness: CorpusFreshness,
+    selector: RefSelector,
+    *,
+    default_branch: str | None = None,
+) -> bool:
     """Return whether cached metadata already covers the requested selector."""
-    return profile_join(freshness.profile, selector.profile) == freshness.profile and set(
-        selector.globs
-    ).issubset(freshness.ref_globs)
+    branch_matches = default_branch is None or freshness.default_branch == default_branch
+    return (
+        branch_matches
+        and profile_join(freshness.profile, selector.profile) == freshness.profile
+        and set(selector.globs).issubset(freshness.ref_globs)
+    )

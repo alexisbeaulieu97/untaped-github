@@ -133,6 +133,7 @@ class GitCorpusCache:
         return CorpusFreshness(
             fetched_at=fetched,
             profile=_metadata_profile(data),
+            default_branch=_optional_str(data.get("ref")),
             ref_globs=_metadata_ref_globs(data),
             archived=_metadata_archived(data),
         )
@@ -157,9 +158,15 @@ class GitCorpusCache:
                 capture_text=True,
             ),
         )
+        available_refs = tuple((result.stdout or "").splitlines())
+        default_ref = f"refs/heads/{branch}"
+        if default_ref not in available_refs:
+            raise GitCorpusError(
+                f"cached repository {repo.full_name} is missing canonical default ref {default_ref}"
+            )
         refs = (
             ref
-            for ref in (result.stdout or "").splitlines()
+            for ref in available_refs
             if _selector_covers_ref(selector, ref, default_branch=branch)
         )
         return _order_refs(tuple(dict.fromkeys(refs)), default_branch=branch)
