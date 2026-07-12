@@ -82,6 +82,11 @@ def test_groups_are_mounted_and_whoami_runs(_isolate: Path) -> None:
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "octocat"
 
+    help_result = CliInvoker().invoke(wired.meta, ["--help"])
+    assert help_result.exit_code == 0, help_result.output
+    for command in ("repos", "search", "sweep", "cache"):
+        assert command in help_result.stdout
+
 
 def test_config_group_lists_and_redacts_github_settings(_isolate: Path) -> None:
     _isolate.write_text(

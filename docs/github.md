@@ -37,6 +37,9 @@ changed with:
 
 ```bash
 untaped-github config set corpus_path ~/.cache/untaped-github/corpus
+untaped-github config set sweep.fetch_depth 1
+untaped-github config set sweep.sync_concurrency 12
+untaped-github config set sweep.max_age_seconds 3600
 ```
 
 ## Commands
@@ -142,82 +145,136 @@ code search itself. Online sweeps use REST inventory to expand `--org`,
 available on `PATH`.
 
 ```bash
-untaped-github sweep --org acme --grep 'requests\.get\(' --path 'src/**' --has-file Jenkinsfile
-untaped-github sweep --team acme/platform --grep log4j --grep slf4j --any
-untaped-github sweep --org acme --grep old_api --not-grep new_api
-untaped-github sweep --org acme --ref 'release/*' --grep jenkins --show matches
-untaped-github sweep --org acme --grep 'dangerous_call' --fail-on-match
+untaped-github sweep content 'requests\.get\(' --org acme
+untaped-github sweep content old_api --org acme --without-content new_api
+untaped-github sweep content TODO --team acme/platform \
+  --include-path 'src/**' --exclude-path 'src/vendor/**' --context 2
+untaped-github sweep paths Jenkinsfile --org acme --with-path '.github/**'
+untaped-github sweep paths '*.py' --org acme --without-content copyright
+untaped-github sweep content dangerous_call --org acme --fail-on-match
 ```
 
-Every sweep needs a scope (`--org`, `--team`, `--repo`, or `--stdin`) and at
-least one predicate. Content predicates are `--grep PATTERN` and
-`--not-grep PATTERN`; file-presence predicates are `--has-file GLOB` and
-`--lacks-file GLOB`. `--path PATHSPEC` narrows content predicates and must be
-paired with a content predicate. `--ignore-case`/`-i`,
-`--fixed-strings`/`-F`, and `--word-regexp`/`-w` apply to every content
-predicate in the query.
+The target subcommand and required positional value are the primary question
+and the only source of reported evidence: `content REGEX` reports content
+locations; `paths GLOB` reports tracked paths. Every sweep needs at least one
+additive scope (`--org`, `--team`, `--repo`, or `--stdin`). Archived
+repositories are excluded unless `--include-archived` is passed.
 
-Positive predicates combine with AND by default. `--any` ORs positive
-predicates only; negated predicates always remain conjunctive. Predicate
-labels in table and pipe output are stable:
-`grep:<pattern>`, `not-grep:<pattern>`, `has-file:<glob>`, and
-`lacks-file:<glob>`.
+Repeatable `--with-content`, `--without-content`, `--with-path`, and
+`--without-path` constraints are conjunctive. The primary matcher and every
+constraint must pass on the same selected ref; constraint witnesses never
+appear as report evidence. Pipe records from `repos list` or another sweep are
+accepted by `--stdin` through their `full_name` identifier.
+
+Content uses forced POSIX ERE by default, independently of Git configuration.
+`--fixed-strings`, `--ignore-case`, and `--word-regexp` apply to every content
+matcher in the invocation. Binary files are skipped. `--include-path` and
+`--exclude-path` filter content evaluation only, with exclusion winning.
+
+Paths and content filters use case-sensitive gitignore-style patterns. Useful
+examples include `Jenkinsfile` (that basename at any depth), `/Jenkinsfile`
+(repository root only), `.github/**` (root `.github` descendants), and
+`**/*.py`. Negation belongs in the option name: unescaped leading `!`,
+comment-only patterns, actual newlines, and invalid content regexes fail before
+repository refresh begins.
 
 By default, sweeps cover each repository's default branch. `--refs branches`,
 `--refs tags`, and `--refs all` widen the cached profile; repeatable
 `--ref GLOB` adds matching branch/tag refs to the default branch. Cache
 metadata only widens, never narrows, so a later narrow sweep can reuse a wider
-cache.
+cache while its recorded default-branch identity still matches live inventory.
+When the default branch changes, the current request replaces the former
+profile and globs, and refs covered only by that former selector are pruned.
+Evidence always retains canonical refs such as `refs/heads/main` and
+`refs/tags/main`, so same-named branches and tags stay distinct.
 
-Sync behavior:
+Freshness behavior:
 
 | Flag | Effect |
 | ---- | ------ |
 | default | Refresh uncached, stale, or under-profiled repos before scanning. |
-| `--sync` | Force a refresh for every repo in scope. |
-| `--no-sync` | Scan only local corpus metadata and cached refs; org/team live expansion is unavailable. |
-| `--depth N` | Git fetch depth; `0` is full. Default `1`. |
-| `--parallel`/`-j` | Parallel Git workers, capped at 32. |
+| `--refresh` | Force preparation for every repository in scope. |
+| `--cached` | Make no network calls and scan covering corpus state only; rejects `--team`. |
 
-Freshness uses `github.sweep.max_age_seconds` (default `3600`), and the
-worker default is `github.sweep.sync_concurrency` (default `12`). A failed
-refresh does not automatically fail the sweep: if the local cache already
-covers the requested refs, the repo is scanned from cache and counted as
-cached; otherwise it is listed in the unscanned bucket. The footer reports:
+Operational tuning is configuration-only:
 
-```text
-Sweep: N matched of M scanned (R refreshed, C cached), oldest fetch <timestamp>
-warning: unscanned OWNER/NAME: <reason>
+```yaml
+github:
+  sweep:
+    fetch_depth: 1
+    sync_concurrency: 12
+    max_age_seconds: 3600
 ```
 
-Default exit code is `0` for no matches, matches, and non-strict unscanned
-gaps. `--fail-on-match` promotes any matching repo to exit `1`, which is the
-CI gate for banned patterns. `--strict` promotes any unscanned repo to exit
-`1`.
+`fetch_depth` and `max_age_seconds` are non-negative; depth `0` requests full
+history. `sync_concurrency` is positive and capped by the SDK. A failed refresh
+uses a covering cached copy when possible; otherwise the repo becomes a
+`prepare` failure. Evaluation errors become `scan` failures.
 
-The default `--show repos` output emits `github.sweep_repo` records with:
-`full_name`, `clone_url`, `refs_matched`, `hits`, `owners`, and `synced_at`.
-Table view shows `full_name`, one column per predicate label, `refs_matched`
-when refs go beyond default, and `owners`.
+Every output format writes the coverage summary and unscanned failures to
+stderr. Output on stdout is format-specific:
 
-`--show matches` emits `github.sweep_match` records with:
-`full_name`, `refs`, `path`, `line`, and `text`. Identical content reachable
-from multiple selected refs is deduped into one match row with multiple refs.
+- JSON/YAML serialize the self-contained `{query, results, failures, summary}`
+  report. Result projections retain `full_name` and `refs_matched`.
+- Table emits one row per primary match with repo, canonical refs, evidence,
+  and the result-level owner union.
+- Raw emits one row per matching repository. Without columns it emits unique
+  `full_name` values; nested match columns are ordered arrays.
+- Pipe emits one complete `github.sweep_result` record per result and ignores
+  every `--columns` value, including `?`, so it remains safe as downstream
+  sweep scope.
+
+For example, `--format json` produces an archival report rather than a bare
+row list:
+
+```json
+{
+  "query": {
+    "scope": {"orgs": ["acme"], "teams": [], "repos": [], "stdin": false, "include_archived": false},
+    "question": {"kind": "content", "pattern": "TODO"},
+    "constraints": [],
+    "content_options": {"mode": "extended_regex", "ignore_case": false, "word_regexp": false},
+    "path_filters": {"include": [], "exclude": []},
+    "refs": {"profile": "default", "globs": []},
+    "freshness": "auto",
+    "context": 0
+  },
+  "results": [{
+    "full_name": "acme/api",
+    "clone_url": "https://github.com/acme/api.git",
+    "refs_matched": ["refs/heads/main"],
+    "matches": [{"kind": "content", "refs": ["refs/heads/main"], "path": "src/api.py", "start_line": 42, "end_line": 42, "content": "# TODO"}],
+    "owners": ["@acme/platform"],
+    "synced_at": "2026-07-10T15:00:00+00:00"
+  }],
+  "failures": [],
+  "summary": {"selected": 1, "prepared": 1, "scanned": 1, "matched": 1, "unscanned": 0, "refreshed": 1, "cached": 0, "oldest_fetched_at": "2026-07-10T15:00:00+00:00"}
+}
+```
+
+Use `--columns ?` with a non-pipe format to list selectors without running a
+sweep. Content evidence may include clipped source context with `--context N`;
+the option is content-primary-only.
+CODEOWNERS is resolved per qualifying ref for primary-evidence paths only.
+
+Default exit code is `0` for no matches, matches, and declared partial
+reports. `--fail-on-match` promotes any match to exit `1`; `--require-complete`
+promotes any unscanned repository to exit `1`.
 
 Typed sweep records can feed another sweep because `--stdin` reads
 `full_name` from pipe envelopes or bare owner/name lines:
 
 ```bash
 untaped-github repos list 'svc-*' --org acme --format pipe \
-  | untaped-github sweep --stdin --grep 'old_api' --format pipe \
-  | untaped-github sweep --stdin --not-grep 'new_api'
+  | untaped-github sweep content old_api --stdin --format pipe \
+  | untaped-github sweep paths Jenkinsfile --stdin --cached
 ```
 
 `untaped-workspace add --stdin` reads generic URL lines, not typed pipe
 records. Use raw URL output when turning matching repos into a workspace:
 
 ```bash
-untaped-github sweep --org acme --grep 'old_api' \
+untaped-github sweep content old_api --org acme \
   --format raw --columns clone_url \
   | untaped-workspace add --stdin --workspace remediation
 ```
@@ -328,6 +385,19 @@ untaped-github search issues "memory leak" --state open
 ```
 
 ## Pipe-Friendly Examples
+
+Stable pipe kinds and identifiers:
+
+| Producer | Kind | Identifier |
+| -------- | ---- | ---------- |
+| `whoami` | `github.user` | `login` |
+| `repos list`, `search repos` | `github.repo` | `full_name` |
+| `search code` | `github.code` | `name` |
+| `search issues` | `github.issue` | `repo` |
+| `search users` | `github.user` | `id` |
+| `sweep content`, `sweep paths` | `github.sweep_result` | `full_name` |
+| `cache status`, `cache clean` | `github.corpus_repo` | `repo` |
+| `cache worktree` | `github.worktree` | `repo` |
 
 ```bash
 untaped-github search repos --language python --format raw

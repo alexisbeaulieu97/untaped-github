@@ -1,163 +1,485 @@
-"""Cyclopts command: ``untaped github sweep``."""
+"""Cyclopts sub-app: ``untaped-github sweep content|paths``."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Literal
+from collections.abc import Sequence
+from typing import Annotated, Literal, cast
 
-from cyclopts import Parameter, validators
+from cyclopts import Group, Parameter, Token, validators
 from untaped.api import (
-    ColumnsOption,
     ConfigError,
-    FormatOption,
     OutputFormat,
     app_context,
-    clamp_parallel,
+    create_app,
     echo,
-    emit,
     finish,
+    raise_usage,
     read_identifiers,
     report_errors,
 )
 
-from untaped_github.application import RepositoryInventoryScope
 from untaped_github.cli._client import open_client
-from untaped_github.cli._scopes import OrgOption, TeamOption, parse_team_scopes
+from untaped_github.cli.sweep_output import emit_sweep_report, preflight_sweep_output
 from untaped_github.settings import GithubSettings
 
-if TYPE_CHECKING:
-    from untaped_github.application import GitCorpus, SweepMatch, SweepReport
-    from untaped_github.domain import RepoSweepOutcome, SweepQuery
+SCOPE = Group("Scope", sort_key=10)
+CONSTRAINTS = Group("Constraints", sort_key=20)
+CONTENT = Group("Content matching", sort_key=30)
+REVISIONS = Group("Revisions", sort_key=40)
+FRESHNESS = Group("Freshness", sort_key=50)
+REPORT = Group("Report", sort_key=60)
+EXIT_POLICY = Group("Exit policy", sort_key=70)
 
+app = create_app(
+    name="sweep",
+    help="Ask evidence-first content or path questions across repository refs.",
+)
+
+QuestionPattern = Annotated[
+    str,
+    Parameter(
+        group=CONTENT,
+        help="Primary matcher; the only source of reported evidence.",
+    ),
+]
+OrgOption = Annotated[
+    list[str] | None,
+    Parameter(
+        name="--org",
+        group=SCOPE,
+        help="GitHub organization. Repeatable and additive.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
+]
+TeamOption = Annotated[
+    list[str] | None,
+    Parameter(
+        name="--team",
+        group=SCOPE,
+        help="Team ORG/SLUG, or SLUG with exactly one --org. Repeatable and additive.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
+]
 RepoOption = Annotated[
     list[str] | None,
-    Parameter(name="--repo", help="Repository owner/name. Repeatable.", consume_multiple=False),
+    Parameter(
+        name="--repo",
+        group=SCOPE,
+        help="Repository OWNER/NAME. Repeatable and additive.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
 ]
 StdinOption = Annotated[
     bool,
-    Parameter(name="--stdin", negative="", help="Read repository full_name values from stdin."),
-]
-DepthOption = Annotated[
-    int,
     Parameter(
-        name="--depth",
-        validator=validators.Number(gte=0),
-        help="Git fetch depth; 0 is full.",
+        name="--stdin",
+        negative="",
+        group=SCOPE,
+        help="Read bare OWNER/NAME values or full_name pipe records from stdin.",
     ),
 ]
-ParallelOption = Annotated[
-    int | None,
-    Parameter(name=["--parallel", "-j"], help="Parallel Git workers (capped at 32)."),
+IncludeArchivedOption = Annotated[
+    bool,
+    Parameter(
+        name="--include-archived",
+        negative="",
+        group=SCOPE,
+        help="Include archived repositories (default: excluded).",
+    ),
+]
+ConstraintKind = Literal["with_content", "without_content", "with_path", "without_path"]
+ConstraintInput = tuple[ConstraintKind, str]
+
+
+def _constraint_converter(
+    _type: object,
+    tokens: Sequence[Token],
+) -> list[ConstraintInput]:
+    kinds: dict[str, ConstraintKind] = {
+        "--with-content": "with_content",
+        "--without-content": "without_content",
+        "--with-path": "with_path",
+        "--without-path": "without_path",
+    }
+    return [(kinds[token.keyword or ""], token.value) for token in tokens]
+
+
+ConstraintOption = Annotated[
+    list[ConstraintInput] | None,
+    Parameter(
+        name=["--with-content", "--without-content", "--with-path", "--without-path"],
+        converter=_constraint_converter,
+        group=CONSTRAINTS,
+        help="Same-ref constraint. Repeatable in stated order; every constraint must pass.",
+        consume_multiple=False,
+        n_tokens=1,
+        negative_iterable="",
+    ),
+]
+IncludePathOption = Annotated[
+    list[str] | None,
+    Parameter(
+        name="--include-path",
+        group=CONTENT,
+        help="Limit content evaluation to matching paths. Repeatable; e.g. '**'.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
+]
+ExcludePathOption = Annotated[
+    list[str] | None,
+    Parameter(
+        name="--exclude-path",
+        group=CONTENT,
+        help="Exclude content paths; exclusion wins, e.g. '.github/**'. Repeatable.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
+]
+FixedStringsOption = Annotated[
+    bool,
+    Parameter(
+        name="--fixed-strings",
+        negative="",
+        group=CONTENT,
+        help="Treat every content pattern literally (default: forced POSIX ERE).",
+    ),
+]
+IgnoreCaseOption = Annotated[
+    bool,
+    Parameter(
+        name="--ignore-case",
+        negative="",
+        group=CONTENT,
+        help="Match every content pattern case-insensitively (default: case-sensitive).",
+    ),
+]
+WordRegexpOption = Annotated[
+    bool,
+    Parameter(
+        name="--word-regexp",
+        negative="",
+        group=CONTENT,
+        help="Require word-boundary matches for every content pattern (default: off).",
+    ),
+]
+RefsOption = Annotated[
+    Literal["default", "branches", "tags", "all"],
+    Parameter(name="--refs", group=REVISIONS, help="Ref profile (default: default)."),
+]
+RefOption = Annotated[
+    list[str] | None,
+    Parameter(
+        name="--ref",
+        group=REVISIONS,
+        help="Additional branch/tag name glob. Repeatable and unioned with --refs.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
+]
+RefreshOption = Annotated[
+    bool,
+    Parameter(
+        name="--refresh",
+        negative="",
+        group=FRESHNESS,
+        help=(
+            "Force preparation of the selected scope (mutually exclusive with --cached). "
+            "Default auto freshness refreshes uncached, stale, or under-profiled repositories."
+        ),
+    ),
+]
+CachedOption = Annotated[
+    bool,
+    Parameter(
+        name="--cached",
+        negative="",
+        group=FRESHNESS,
+        help="Use covering corpus state only; make no network calls (rejects --team).",
+    ),
+]
+FormatOption = Annotated[
+    OutputFormat,
+    Parameter(name=["--format", "-f"], group=REPORT, help="Output format (default: table)."),
+]
+ColumnsOption = Annotated[
+    list[str] | None,
+    Parameter(
+        name=["--columns", "-c"],
+        group=REPORT,
+        help="Result columns to include. Repeatable; use '?' to list selectors.",
+        consume_multiple=False,
+        negative_iterable="",
+    ),
+]
+FailOnMatchOption = Annotated[
+    bool,
+    Parameter(
+        name="--fail-on-match",
+        negative="",
+        group=EXIT_POLICY,
+        help="Exit 1 when at least one repository matches (default: matches exit 0).",
+    ),
+]
+RequireCompleteOption = Annotated[
+    bool,
+    Parameter(
+        name="--require-complete",
+        negative="",
+        group=EXIT_POLICY,
+        help="Exit 1 when any selected repository is unscanned (default: partial reports exit 0).",
+    ),
 ]
 
 
-def sweep_command(
+@app.command(name="content")
+def content_command(
+    regex: QuestionPattern,
+    /,
     *,
     org: OrgOption = None,
     team: TeamOption = None,
     repo: RepoOption = None,
     stdin: StdinOption = False,
-    archived: Annotated[bool, Parameter(name="--archived", negative="")] = False,
-    grep: Annotated[
-        list[str] | None,
-        Parameter(name="--grep", help="Content regex. Repeatable.", consume_multiple=False),
-    ] = None,
-    not_grep: Annotated[
-        list[str] | None,
+    include_archived: IncludeArchivedOption = False,
+    constraint: ConstraintOption = None,
+    include_path: IncludePathOption = None,
+    exclude_path: ExcludePathOption = None,
+    fixed_strings: FixedStringsOption = False,
+    ignore_case: IgnoreCaseOption = False,
+    word_regexp: WordRegexpOption = False,
+    refs: RefsOption = "default",
+    ref: RefOption = None,
+    refresh: RefreshOption = False,
+    cached: CachedOption = False,
+    context: Annotated[
+        int,
         Parameter(
-            name="--not-grep", help="Content regex that must not match.", consume_multiple=False
+            name="--context",
+            group=REPORT,
+            validator=validators.Number(gte=0),
+            help="Include N surrounding source lines (default: 0).",
         ),
-    ] = None,
-    path: Annotated[
-        list[str] | None,
-        Parameter(
-            name="--path", help="Git pathspec for content predicates.", consume_multiple=False
-        ),
-    ] = None,
-    has_file: Annotated[
-        list[str] | None,
-        Parameter(name="--has-file", help="File glob that must exist.", consume_multiple=False),
-    ] = None,
-    lacks_file: Annotated[
-        list[str] | None,
-        Parameter(
-            name="--lacks-file", help="File glob that must not exist.", consume_multiple=False
-        ),
-    ] = None,
-    any_mode: Annotated[bool, Parameter(name="--any", negative="")] = False,
-    ignore_case: Annotated[bool, Parameter(name=["--ignore-case", "-i"], negative="")] = False,
-    fixed_strings: Annotated[bool, Parameter(name=["--fixed-strings", "-F"], negative="")] = False,
-    word_regexp: Annotated[bool, Parameter(name=["--word-regexp", "-w"], negative="")] = False,
-    refs: Annotated[
-        Literal["default", "branches", "tags", "all"],
-        Parameter(name="--refs", help="Ref profile to sweep."),
-    ] = "default",
-    ref: Annotated[
-        list[str] | None,
-        Parameter(name="--ref", help="Additional ref glob. Repeatable.", consume_multiple=False),
-    ] = None,
-    sync: Annotated[
-        bool | None,
-        Parameter(name="--sync", negative="--no-sync", help="Force sync or use cache only."),
-    ] = None,
-    show: Annotated[
-        Literal["repos", "matches"],
-        Parameter(name="--show", help="Report repo rows or deduped match rows."),
-    ] = "repos",
-    owners: Annotated[bool, Parameter(name="--owners", negative="--no-owners")] = True,
+    ] = 0,
     fmt: FormatOption = "table",
     columns: ColumnsOption = None,
-    strict: Annotated[bool, Parameter(name="--strict", negative="")] = False,
-    fail_on_match: Annotated[bool, Parameter(name="--fail-on-match", negative="")] = False,
-    depth: DepthOption = 1,
-    parallel: ParallelOption = None,
+    fail_on_match: FailOnMatchOption = False,
+    require_complete: RequireCompleteOption = False,
 ) -> None:
-    """Sweep repository refs for content and file-presence predicates."""
+    """Report content locations matching REGEX (forced POSIX ERE by default)."""
+    _run(
+        question_kind="content",
+        pattern=regex,
+        org=org,
+        team=team,
+        repo=repo,
+        stdin=stdin,
+        include_archived=include_archived,
+        constraints=constraint,
+        include_path=include_path,
+        exclude_path=exclude_path,
+        fixed_strings=fixed_strings,
+        ignore_case=ignore_case,
+        word_regexp=word_regexp,
+        refs=refs,
+        ref=ref,
+        refresh=refresh,
+        cached=cached,
+        context=context,
+        fmt=fmt,
+        columns=columns,
+        fail_on_match=fail_on_match,
+        require_complete=require_complete,
+    )
+
+
+@app.command(name="paths")
+def paths_command(
+    glob: QuestionPattern,
+    /,
+    *,
+    org: OrgOption = None,
+    team: TeamOption = None,
+    repo: RepoOption = None,
+    stdin: StdinOption = False,
+    include_archived: IncludeArchivedOption = False,
+    constraint: ConstraintOption = None,
+    include_path: IncludePathOption = None,
+    exclude_path: ExcludePathOption = None,
+    fixed_strings: FixedStringsOption = False,
+    ignore_case: IgnoreCaseOption = False,
+    word_regexp: WordRegexpOption = False,
+    refs: RefsOption = "default",
+    ref: RefOption = None,
+    refresh: RefreshOption = False,
+    cached: CachedOption = False,
+    fmt: FormatOption = "table",
+    columns: ColumnsOption = None,
+    fail_on_match: FailOnMatchOption = False,
+    require_complete: RequireCompleteOption = False,
+) -> None:
+    """Report tracked repository paths matching gitignore-style GLOB."""
+    _run(
+        question_kind="path",
+        pattern=glob,
+        org=org,
+        team=team,
+        repo=repo,
+        stdin=stdin,
+        include_archived=include_archived,
+        constraints=constraint,
+        include_path=include_path,
+        exclude_path=exclude_path,
+        fixed_strings=fixed_strings,
+        ignore_case=ignore_case,
+        word_regexp=word_regexp,
+        refs=refs,
+        ref=ref,
+        refresh=refresh,
+        cached=cached,
+        context=0,
+        fmt=fmt,
+        columns=columns,
+        fail_on_match=fail_on_match,
+        require_complete=require_complete,
+    )
+
+
+def _run(
+    *,
+    question_kind: Literal["content", "path"],
+    pattern: str,
+    org: list[str] | None,
+    team: list[str] | None,
+    repo: list[str] | None,
+    stdin: bool,
+    include_archived: bool,
+    constraints: list[ConstraintInput] | None,
+    include_path: list[str] | None,
+    exclude_path: list[str] | None,
+    fixed_strings: bool,
+    ignore_case: bool,
+    word_regexp: bool,
+    refs: Literal["default", "branches", "tags", "all"],
+    ref: list[str] | None,
+    refresh: bool,
+    cached: bool,
+    context: int,
+    fmt: OutputFormat,
+    columns: list[str] | None,
+    fail_on_match: bool,
+    require_complete: bool,
+) -> None:
     from untaped_github.application import (  # noqa: PLC0415
         ResolveRepositoryInventory,
         Sweep,
         SweepOptions,
     )
-    from untaped_github.domain import RefSelector, SweepQuery  # noqa: PLC0415
+    from untaped_github.domain import (  # noqa: PLC0415
+        ContentConstraint,
+        ContentOptions,
+        ContentQuestion,
+        PathConstraint,
+        PathFilters,
+        PathQuestion,
+        RefSelector,
+        SweepQuery,
+        SweepScope,
+    )
     from untaped_github.infrastructure import GitCorpusCache  # noqa: PLC0415
     from untaped_github.infrastructure.git_corpus import git_auth_header  # noqa: PLC0415
 
     with report_errors():
-        ctx = app_context()
-        settings = ctx.section("github", GithubSettings)
-        stdin_repos = tuple(read_identifiers([], stdin=True, id_field="full_name")) if stdin else ()
-        scope = _scope(org=org, team=team, repo=repo, stdin_repos=stdin_repos)
-        query = SweepQuery(
-            greps=tuple(grep or ()),
-            not_greps=tuple(not_grep or ()),
-            paths=tuple(path or ()),
-            has_files=tuple(has_file or ()),
-            lacks_files=tuple(lacks_file or ()),
-            any_mode=any_mode,
-            ignore_case=ignore_case,
+        if not preflight_sweep_output(fmt=fmt, columns=columns):
+            return
+        _validate_paths_content_options(
+            question_kind=question_kind,
+            constraints=constraints,
+            include_path=include_path,
+            exclude_path=exclude_path,
             fixed_strings=fixed_strings,
+            ignore_case=ignore_case,
             word_regexp=word_regexp,
+        )
+        if refresh and cached:
+            raise_usage("--refresh and --cached are mutually exclusive")
+        orgs = tuple(org or ())
+        teams = tuple(team or ())
+        repos = tuple(repo or ())
+        if not (orgs or teams or repos or stdin):
+            raise_usage("sweep requires --org, --team, --repo, or --stdin")
+        if cached and teams:
+            raise_usage("--team requires the API and cannot resolve from cached corpus metadata")
+
+        question_label = "REGEX" if question_kind == "content" else "GLOB"
+        try:
+            question = (
+                ContentQuestion(pattern) if question_kind == "content" else PathQuestion(pattern)
+            )
+        except ValueError as exc:
+            raise ConfigError(f"{question_label} {pattern!r}: {exc}") from exc
+        normalized_constraint_list: list[ContentConstraint | PathConstraint] = []
+        for kind, value in constraints or ():
+            try:
+                constraint = (
+                    ContentConstraint(kind, value)
+                    if kind in ("with_content", "without_content")
+                    else PathConstraint(cast("Literal['with_path', 'without_path']", kind), value)
+                )
+            except ValueError as exc:
+                label = f"--{kind.replace('_', '-')}"
+                raise ConfigError(f"{label} {value!r}: {exc}") from exc
+            normalized_constraint_list.append(constraint)
+        normalized_constraints = tuple(normalized_constraint_list)
+        for label, values, include in (
+            ("--include-path", include_path, True),
+            ("--exclude-path", exclude_path, False),
+        ):
+            for value in values or ():
+                try:
+                    PathFilters(
+                        include=(value,) if include else (),
+                        exclude=() if include else (value,),
+                    )
+                except ValueError as exc:
+                    raise ConfigError(f"{label} {value!r}: {exc}") from exc
+        query = SweepQuery(
+            scope=SweepScope(
+                orgs=orgs,
+                teams=teams,
+                repos=repos,
+                stdin=stdin,
+                include_archived=include_archived,
+            ),
+            question=question,
+            constraints=normalized_constraints,
+            content_options=ContentOptions(
+                mode="fixed_strings" if fixed_strings else "extended_regex",
+                ignore_case=ignore_case,
+                word_regexp=word_regexp,
+            ),
+            path_filters=PathFilters(
+                include=tuple(include_path or ()),
+                exclude=tuple(exclude_path or ()),
+            ),
             refs=RefSelector(profile=refs, globs=tuple(ref or ())),
+            freshness="cached" if cached else "refresh" if refresh else "auto",
+            context=context,
         )
-        _validate_query(query)
-        workers = _parallel(parallel if parallel is not None else settings.sweep.sync_concurrency)
+        settings = app_context().section("github", GithubSettings)
+        stdin_repos = tuple(read_identifiers([], stdin=True, id_field="full_name")) if stdin else ()
         corpus = GitCorpusCache()
-        _validate_content_patterns(corpus, settings, query)
-
-        sync_mode: Literal["auto", "force", "off"]
-        sync_mode = "auto" if sync is None else "force" if sync else "off"
         options = SweepOptions(
-            scope=scope,
-            stdin_repos=stdin_repos,
-            include_archived=archived,
             query=query,
-            sync=sync_mode,
+            stdin_repos=tuple(dict.fromkeys(stdin_repos)),
+            fetch_depth=settings.sweep.fetch_depth,
+            sync_concurrency=_configured_concurrency(settings.sweep.sync_concurrency),
             max_age_seconds=settings.sweep.max_age_seconds,
-            depth=depth,
-            parallel=workers,
-            owners=owners,
         )
-
-        if sync_mode == "off":
+        if cached:
             report = Sweep(
                 inventory=lambda _scope: (),
                 corpus=corpus,
@@ -175,79 +497,34 @@ def sweep_command(
                         auth_header=lambda: git_auth_header(token) if token else None,
                     )(options)
 
-        if show == "matches":
-            rows = _match_records(report.matches)
-            emit(
-                rows, fmt=fmt, columns=columns, kind="github.sweep_match", empty="No matches found."
-            )
-        else:
-            rows = _repo_records(report.rows)
-            emit(
-                _display_rows(rows, query=query, owners=owners, fmt=fmt, columns=columns),
-                fmt=fmt,
-                columns=columns or _default_columns(query=query, owners=owners),
-                kind="github.sweep_repo",
-                empty="No matching repositories found.",
-            )
-        _footer(report)
-        finish((strict and bool(report.unscanned)) or (fail_on_match and bool(report.rows)))
-
-
-def _scope(
-    *,
-    org: list[str] | None,
-    team: list[str] | None,
-    repo: list[str] | None,
-    stdin_repos: tuple[str, ...],
-) -> RepositoryInventoryScope:
-    orgs = tuple(org or ())
-    team_scopes = parse_team_scopes(team, orgs=orgs)
-    repos = tuple(repo or ())
-    if not orgs and not team_scopes and not repos and not stdin_repos:
-        raise ConfigError("sweep requires --org, --team, --repo, or --stdin")
-    return RepositoryInventoryScope(orgs=orgs, teams=team_scopes, repos=repos)
-
-
-def _validate_query(query: SweepQuery) -> None:
-    try:
-        query.validate()
-    except ValueError as exc:
-        raise ConfigError(str(exc)) from exc
-
-
-def _validate_content_patterns(
-    corpus: GitCorpus,
-    settings: GithubSettings,
-    query: SweepQuery,
-) -> None:
-    paths = query.paths
-    fixed_strings = query.fixed_strings
-    for flag, pattern in (
-        *[("--grep", pattern) for pattern in query.greps],
-        *[("--not-grep", pattern) for pattern in query.not_greps],
-    ):
-        error = corpus.validate_pattern(
-            root=settings.corpus_path,
-            pattern=pattern,
-            paths=paths,
-            fixed_strings=fixed_strings,
+        emit_sweep_report(report, fmt=fmt, columns=columns)
+        _status(report)
+        finish(
+            (fail_on_match and bool(report.results)) or (require_complete and bool(report.failures))
         )
-        if error is None:
-            continue
-        path = _path_from_error(paths, error)
-        if path is not None:
-            raise ConfigError(f"--path {path!r}: {error}")
-        raise ConfigError(f"{flag} {pattern!r}: {error}")
 
 
-def _path_from_error(paths: tuple[str, ...], error: str) -> str | None:
-    return next((path for path in paths if path in error), None)
-
-
-def _parallel(value: int) -> int:
-    if value < 1:
-        raise ConfigError("--parallel must be positive")
-    return clamp_parallel(value, cap=32, policy="Git corpus worker cap")
+def _validate_paths_content_options(
+    *,
+    question_kind: Literal["content", "path"],
+    constraints: list[ConstraintInput] | None,
+    include_path: list[str] | None,
+    exclude_path: list[str] | None,
+    fixed_strings: bool,
+    ignore_case: bool,
+    word_regexp: bool,
+) -> None:
+    has_content_constraint = any(
+        kind in ("with_content", "without_content") for kind, _value in constraints or ()
+    )
+    if (
+        question_kind == "path"
+        and not has_content_constraint
+        and (include_path or exclude_path or fixed_strings or ignore_case or word_regexp)
+    ):
+        raise_usage(
+            "content matching options on sweep paths requires --with-content or --without-content"
+        )
 
 
 def _token(settings: GithubSettings) -> str:
@@ -256,78 +533,138 @@ def _token(settings: GithubSettings) -> str:
     return settings.token.get_secret_value().strip()
 
 
-def _repo_records(rows: tuple[RepoSweepOutcome, ...]) -> list[dict[str, object]]:
-    return [
-        {
-            "full_name": row.full_name,
-            "clone_url": row.clone_url,
-            "refs_matched": list(row.refs_matched),
-            "hits": dict(row.hits),
-            "owners": list(row.owners),
-            "synced_at": row.synced_at,
-        }
-        for row in rows
-    ]
+def _configured_concurrency(value: int) -> int:
+    cap = 32
+    if value <= cap:
+        return value
+    echo(
+        f"warning: github.sweep.sync_concurrency {value} clamped to {cap} (Git corpus worker cap)",
+        err=True,
+    )
+    return cap
 
 
-def _match_records(rows: tuple[SweepMatch, ...]) -> list[dict[str, object]]:
-    return [
-        {
-            "full_name": row.full_name,
-            "refs": list(row.refs),
-            "path": row.path,
-            "line": row.line,
-            "text": row.text,
-        }
-        for row in rows
-    ]
+def _status(report: object) -> None:
+    from untaped_github.domain import SweepReport  # noqa: PLC0415
 
-
-def _display_rows(
-    rows: list[dict[str, object]],
-    *,
-    query: SweepQuery,
-    owners: bool,
-    fmt: OutputFormat,
-    columns: list[str] | None,
-) -> list[dict[str, object]]:
-    if fmt != "table" or columns:
-        return rows
-    labels = query.labels()
-    display: list[dict[str, object]] = []
-    for row in rows:
-        hits = row["hits"]
-        display_row: dict[str, object] = {"full_name": row["full_name"]}
-        for label in labels:
-            display_row[label] = hits.get(label, 0)  # type: ignore[attr-defined]
-        if query.refs.beyond_default():
-            display_row["refs_matched"] = ",".join(row["refs_matched"])  # type: ignore[arg-type]
-        if owners:
-            display_row["owners"] = ",".join(row["owners"])  # type: ignore[arg-type]
-        display.append(display_row)
-    return display
-
-
-def _default_columns(*, query: SweepQuery, owners: bool) -> list[str] | None:
-    if not query.refs.beyond_default() and owners:
-        return None
-    columns = ["full_name", *query.labels()]
-    if query.refs.beyond_default():
-        columns.append("refs_matched")
-    if owners:
-        columns.append("owners")
-    return columns
-
-
-def _footer(report: SweepReport) -> None:
-    oldest = report.oldest_fetched_at.isoformat() if report.oldest_fetched_at else "n/a"
+    if not isinstance(report, SweepReport):  # pragma: no cover - defensive type boundary
+        raise TypeError("expected SweepReport")
+    for failure in report.failures:
+        echo(
+            f"warning: unscanned {failure.full_name} ({failure.stage}): {failure.reason}",
+            err=True,
+        )
+    summary = report.summary
+    oldest = (
+        summary.oldest_fetched_at.isoformat() if summary.oldest_fetched_at is not None else "n/a"
+    )
     echo(
         (
-            f"Sweep: {len(report.rows)} matched of {report.scanned} scanned "
-            f"({report.refreshed} refreshed, {report.cached} cached), oldest fetch {oldest}"
+            f"Sweep: {summary.matched} matched of {summary.scanned} scanned; "
+            f"{summary.unscanned} unscanned; {summary.refreshed} refreshed, "
+            f"{summary.cached} cached; oldest fetch {oldest}"
         ),
         err=True,
     )
-    if report.unscanned:
-        for failure in report.unscanned:
-            echo(f"warning: unscanned {failure.repo}: {failure.reason}", err=True)
+
+
+_Hidden = Annotated[bool, Parameter(show=False, negative="")]
+_HiddenList = Annotated[
+    list[str] | None,
+    Parameter(show=False, consume_multiple=False),
+]
+
+
+@app.default
+def _migration_command(
+    *tokens: str,
+    org: Annotated[_HiddenList, Parameter(name="--org")] = None,
+    team: Annotated[_HiddenList, Parameter(name="--team")] = None,
+    repo: Annotated[_HiddenList, Parameter(name="--repo")] = None,
+    stdin: Annotated[_Hidden, Parameter(name="--stdin")] = False,
+    grep: Annotated[_HiddenList, Parameter(name="--grep")] = None,
+    not_grep: Annotated[_HiddenList, Parameter(name="--not-grep")] = None,
+    has_file: Annotated[_HiddenList, Parameter(name="--has-file")] = None,
+    lacks_file: Annotated[_HiddenList, Parameter(name="--lacks-file")] = None,
+    path: Annotated[_HiddenList, Parameter(name="--path")] = None,
+    any_mode: Annotated[_Hidden, Parameter(name="--any")] = False,
+    show: Annotated[str | None, Parameter(name="--show", show=False)] = None,
+    owners: Annotated[
+        bool | None,
+        Parameter(name="--owners", negative="--no-owners", show=False),
+    ] = None,
+    depth: Annotated[str | None, Parameter(name="--depth", show=False)] = None,
+    parallel: Annotated[str | None, Parameter(name=["--parallel", "-j"], show=False)] = None,
+    ignore_case: Annotated[_Hidden, Parameter(name=["--ignore-case", "-i"])] = False,
+    fixed_strings: Annotated[_Hidden, Parameter(name=["--fixed-strings", "-F"])] = False,
+    word_regexp: Annotated[_Hidden, Parameter(name=["--word-regexp", "-w"])] = False,
+    refs: Annotated[str | None, Parameter(name="--refs", show=False)] = None,
+    ref: Annotated[_HiddenList, Parameter(name="--ref")] = None,
+    fmt: Annotated[str | None, Parameter(name=["--format", "-f"], show=False)] = None,
+    columns: Annotated[_HiddenList, Parameter(name=["--columns", "-c"])] = None,
+    fail_on_match: Annotated[_Hidden, Parameter(name="--fail-on-match")] = False,
+    strict: Annotated[_Hidden, Parameter(name="--strict")] = False,
+    sync: Annotated[_Hidden, Parameter(name="--sync")] = False,
+    no_sync: Annotated[_Hidden, Parameter(name="--no-sync")] = False,
+    archived: Annotated[_Hidden, Parameter(name="--archived")] = False,
+) -> None:
+    """Reject the retired flat sweep syntax with replacement guidance."""
+    del (
+        tokens,
+        org,
+        team,
+        repo,
+        stdin,
+        ignore_case,
+        fixed_strings,
+        word_regexp,
+        refs,
+        ref,
+        fmt,
+        columns,
+        fail_on_match,
+    )
+    migrations = (
+        (bool(grep), "old --grep syntax was removed", "sweep content REGEX"),
+        (bool(not_grep), "--not-grep was removed; use --without-content", "sweep content REGEX"),
+        (bool(has_file), "old --has-file syntax was removed", "sweep paths GLOB"),
+        (bool(lacks_file), "--lacks-file was removed; use --without-path", "sweep paths GLOB"),
+        (
+            bool(path),
+            "--path was removed; use --include-path or --exclude-path",
+            "sweep content REGEX",
+        ),
+        (any_mode, "--any was removed; constraints are always conjunctive", None),
+        (
+            show is not None,
+            "--show was removed; every sweep now emits one complete report",
+            None,
+        ),
+        (
+            owners is not None,
+            "--owners was removed; primary-evidence owners are always resolved",
+            None,
+        ),
+        (
+            depth is not None,
+            "--depth was removed; configure github.sweep.fetch_depth",
+            None,
+        ),
+        (
+            parallel is not None,
+            "--parallel was removed; configure github.sweep.sync_concurrency",
+            None,
+        ),
+        (strict, "--strict was removed; use --require-complete", None),
+        (sync, "--sync was removed; use --refresh", None),
+        (no_sync, "--no-sync was removed; use --cached", None),
+        (archived, "--archived was removed; use --include-archived", None),
+    )
+    both = "sweep content REGEX or sweep paths GLOB"
+    for active, message, target in migrations:
+        if active:
+            raise_usage(f"{message}; migrate with {target or both}")
+    raise_usage(f"old flat sweep syntax was removed; choose {both}")
+
+
+__all__ = ["app"]

@@ -19,6 +19,7 @@ from untaped_github.domain.models import (
     UserResult,
     WorktreeResult,
 )
+from untaped_github.domain.sweep import SweepResult
 
 PYDANTIC_ROW_SOURCES: dict[type[BaseModel], str] = {
     GithubUser: "login",
@@ -52,6 +53,19 @@ def test_pydantic_row_source_first_field(cls: type[BaseModel], expected_first_ke
         f"{cls.__module__}.{cls.__name__}'s first field is {actual!r}; "
         f"expected {expected_first_key!r}."
     )
+
+
+def test_sweep_result_serializes_full_name_first_for_raw_and_pipe_identity() -> None:
+    result = SweepResult(
+        full_name="acme/api",
+        clone_url="https://github.com/acme/api.git",
+        refs_matched=("refs/heads/main",),
+        matches=(),
+        owners=(),
+        synced_at=None,
+    )
+
+    assert next(iter(result.to_dict())) == "full_name"
 
 
 def test_every_catalogued_pydantic_module_is_discovery_registered() -> None:

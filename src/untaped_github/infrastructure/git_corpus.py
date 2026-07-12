@@ -68,8 +68,12 @@ class GitCorpusCache:
         self._ensure_origin(bare, url, auth_header=scoped_auth_header)
 
         stored = self.repo_freshness(repo, root=root)
-        profile = profile_join(stored.profile, selector.profile) if stored else selector.profile
-        ref_globs = _join_globs(stored.ref_globs if stored else (), selector.globs)
+        if stored is not None and stored.default_branch == branch:
+            profile = profile_join(stored.profile, selector.profile)
+            ref_globs = _join_globs(stored.ref_globs, selector.globs)
+        else:
+            profile = selector.profile
+            ref_globs = selector.globs
         effective = RefSelector(profile=profile, globs=ref_globs)
 
         self._fetch_refspecs(
@@ -133,6 +137,7 @@ class GitCorpusCache:
         return CorpusFreshness(
             fetched_at=fetched,
             profile=_metadata_profile(data),
+            default_branch=_optional_str(data.get("ref")),
             ref_globs=_metadata_ref_globs(data),
             archived=_metadata_archived(data),
         )
@@ -148,7 +153,7 @@ class GitCorpusCache:
         branch = _default_branch(repo)
         bare = cache_path_for(_remote_url(repo), cache_dir=root)
         if not (bare / "HEAD").is_file():
-            return ()
+            raise GitCorpusError("repository is not in the local corpus")
         result = cast(
             subprocess.CompletedProcess[str],
             self._run(
@@ -157,9 +162,15 @@ class GitCorpusCache:
                 capture_text=True,
             ),
         )
+        available_refs = tuple((result.stdout or "").splitlines())
+        default_ref = f"refs/heads/{branch}"
+        if default_ref not in available_refs:
+            raise GitCorpusError(
+                f"cached repository {repo.full_name} is missing canonical default ref {default_ref}"
+            )
         refs = (
-            _short_ref(ref)
-            for ref in (result.stdout or "").splitlines()
+            ref
+            for ref in available_refs
             if _selector_covers_ref(selector, ref, default_branch=branch)
         )
         return _order_refs(tuple(dict.fromkeys(refs)), default_branch=branch)
@@ -171,22 +182,22 @@ class GitCorpusCache:
         root: Path,
         ref: str,
         pattern: str,
-        paths: tuple[str, ...],
         ignore_case: bool,
         fixed_strings: bool,
         word_regexp: bool,
     ) -> tuple[GrepHit, ...]:
         """Run ``git grep`` against one cached ref and include blob OIDs."""
         bare = _cached_bare(repo, root=root)
-        args = ["grep", "-n", "--column", "-z", "-I"]
+        args = ["grep", "--no-color", "-n", "--column", "-z", "-I"]
         if ignore_case:
             args.append("--ignore-case")
         if fixed_strings:
             args.append("--fixed-strings")
+        else:
+            args.append("--extended-regexp")
         if word_regexp:
             args.append("--word-regexp")
-        args.extend(["-e", pattern, ref, "--"])
-        args.extend(paths)
+        args.extend(["-e", pattern, ref])
         result = cast(
             subprocess.CompletedProcess[bytes],
             self._run(args, cwd=bare, capture_bytes=True, check=False),
@@ -232,19 +243,30 @@ class GitCorpusCache:
             subprocess.CompletedProcess[bytes],
             self._run(["show", f"{ref}:{path}"], cwd=bare, capture_bytes=True, check=False),
         )
-        if result.returncode != 0:
+        if result.returncode == 0:
+            return (result.stdout or b"").decode(errors="replace")
+        entry = cast(
+            subprocess.CompletedProcess[bytes],
+            self._run(
+                ["ls-tree", "-z", ref, "--", path],
+                cwd=bare,
+                capture_bytes=True,
+                check=False,
+            ),
+        )
+        if entry.returncode == 0 and not entry.stdout:
             return None
-        return (result.stdout or b"").decode(errors="replace")
+        stderr = _stderr_text(result) or _stderr_text(entry)
+        raise GitCorpusError(stderr or f"git show failed with status {result.returncode}")
 
     def validate_pattern(
         self,
         *,
         root: Path,
         pattern: str,
-        paths: tuple[str, ...],
         fixed_strings: bool,
     ) -> str | None:
-        """Validate one grep pattern and its pathspecs in a scratch repository."""
+        """Validate one grep pattern in a scratch repository."""
         managed_root = root.expanduser()
         managed_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".validate-", dir=managed_root) as scratch:
@@ -253,8 +275,9 @@ class GitCorpusCache:
             args = ["grep", "-n"]
             if fixed_strings:
                 args.append("--fixed-strings")
-            args.extend(["-e", pattern, "--"])
-            args.extend(paths)
+            else:
+                args.append("--extended-regexp")
+            args.extend(["-e", pattern])
             result = cast(
                 subprocess.CompletedProcess[str],
                 self._run(args, cwd=scratch_path, capture_text=True, check=False),
@@ -580,7 +603,10 @@ def _profile_refspecs(profile: RefProfile, branch: str) -> tuple[str, ...]:
     if profile == "branches":
         return ("+refs/heads/*:refs/heads/*",)
     if profile == "tags":
-        return ("+refs/tags/*:refs/tags/*",)
+        return (
+            f"+refs/heads/{branch}:refs/heads/{branch}",
+            "+refs/tags/*:refs/tags/*",
+        )
     return ("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
 
 
@@ -598,18 +624,11 @@ def _selector_covers_ref(selector: RefSelector, ref: str, *, default_branch: str
     return any(fnmatch.fnmatchcase(name, glob) for glob in selector.globs)
 
 
-def _short_ref(ref: str) -> str:
-    if ref.startswith("refs/heads/"):
-        return ref.removeprefix("refs/heads/")
-    if ref.startswith("refs/tags/"):
-        return ref.removeprefix("refs/tags/")
-    return ref
-
-
 def _order_refs(refs: tuple[str, ...], *, default_branch: str) -> tuple[str, ...]:
-    ordered = sorted(ref for ref in refs if ref != default_branch)
-    if default_branch in refs:
-        return (default_branch, *ordered)
+    default_ref = f"refs/heads/{default_branch}"
+    ordered = sorted(ref for ref in refs if ref != default_ref)
+    if default_ref in refs:
+        return (default_ref, *ordered)
     return tuple(ordered)
 
 

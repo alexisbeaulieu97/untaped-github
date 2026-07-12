@@ -20,8 +20,9 @@ from untaped_github.application.search import (
     SearchRepos,
     SearchUsers,
 )
-from untaped_github.application.sweep import Sweep, SweepMatch, SweepOptions, SweepReport
+from untaped_github.application.sweep import Sweep, SweepOptions
 from untaped_github.application.whoami import WhoAmI
+from untaped_github.domain import SweepMatch, SweepReport
 
 __all__ = [
     "CleanCorpus",
