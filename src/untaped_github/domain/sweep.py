@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
@@ -409,18 +408,6 @@ class SweepReport:
             "failures": [failure.to_dict() for failure in self.failures],
             "summary": self.summary.to_dict(),
         }
-
-
-# Transitional row shape consumed by the pre-redesign application use case.
-@dataclass(frozen=True)
-class RepoSweepOutcome:
-    full_name: str
-    clone_url: str | None
-    matched: bool
-    refs_matched: tuple[str, ...]
-    hits: Mapping[str, int]
-    owners: tuple[str, ...]
-    synced_at: str | None
 
 
 def profile_join(stored: RefProfile, requested: RefProfile) -> RefProfile:
