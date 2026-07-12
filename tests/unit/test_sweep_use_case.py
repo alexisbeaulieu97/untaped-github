@@ -551,6 +551,33 @@ def test_operational_codeowners_read_failure_is_a_scan_failure(tmp_path: Path) -
     assert report.failures == (SweepFailure("acme/api", "scan", "git show failed"),)
 
 
+def test_codeowners_parse_failure_is_a_scan_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corpus = _Corpus()
+    corpus.tree_map[("acme/api", MAIN)] = ("README.md",)
+    corpus.blob_map[("acme/api", MAIN, ".github/CODEOWNERS")] = "* @acme/platform\n"
+
+    def fail_parse(_text: str) -> None:
+        raise ValueError("parser exploded")
+
+    monkeypatch.setattr("untaped_github.application.sweep.parse_codeowners", fail_parse)
+
+    report = _sweep(corpus, _Resolver((_item("acme/api"),)), tmp_path / "corpus")(
+        _options(_query(PathQuestion(pattern="README.md")))
+    )
+
+    assert report.results == ()
+    assert report.failures == (
+        SweepFailure(
+            "acme/api",
+            "scan",
+            "could not parse CODEOWNERS refs/heads/main:.github/CODEOWNERS: parser exploded",
+        ),
+    )
+
+
 def test_prepare_scan_failures_cache_fallback_and_summary_invariants(tmp_path: Path) -> None:
     stale = FETCHED_AT - timedelta(hours=2)
     corpus = _Corpus(

@@ -492,8 +492,10 @@ class Sweep:
                 continue
             try:
                 rules = parse_codeowners(text)
-            except Exception:
-                return ()
+            except Exception as exc:
+                raise GitCorpusError(
+                    f"could not parse CODEOWNERS {ref}:{codeowners_path}: {exc}"
+                ) from exc
             break
         if rules is None:
             return ()
