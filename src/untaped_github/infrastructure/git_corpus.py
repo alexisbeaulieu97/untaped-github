@@ -68,8 +68,12 @@ class GitCorpusCache:
         self._ensure_origin(bare, url, auth_header=scoped_auth_header)
 
         stored = self.repo_freshness(repo, root=root)
-        profile = profile_join(stored.profile, selector.profile) if stored else selector.profile
-        ref_globs = _join_globs(stored.ref_globs if stored else (), selector.globs)
+        if stored is not None and stored.default_branch == branch:
+            profile = profile_join(stored.profile, selector.profile)
+            ref_globs = _join_globs(stored.ref_globs, selector.globs)
+        else:
+            profile = selector.profile
+            ref_globs = selector.globs
         effective = RefSelector(profile=profile, globs=ref_globs)
 
         self._fetch_refspecs(
@@ -184,7 +188,7 @@ class GitCorpusCache:
     ) -> tuple[GrepHit, ...]:
         """Run ``git grep`` against one cached ref and include blob OIDs."""
         bare = _cached_bare(repo, root=root)
-        args = ["grep", "-n", "--column", "-z", "-I"]
+        args = ["grep", "--no-color", "-n", "--column", "-z", "-I"]
         if ignore_case:
             args.append("--ignore-case")
         if fixed_strings:

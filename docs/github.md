@@ -182,7 +182,10 @@ By default, sweeps cover each repository's default branch. `--refs branches`,
 `--refs tags`, and `--refs all` widen the cached profile; repeatable
 `--ref GLOB` adds matching branch/tag refs to the default branch. Cache
 metadata only widens, never narrows, so a later narrow sweep can reuse a wider
-cache. Evidence always retains canonical refs such as `refs/heads/main` and
+cache while its recorded default-branch identity still matches live inventory.
+When the default branch changes, the current request replaces the former
+profile and globs, and refs covered only by that former selector are pruned.
+Evidence always retains canonical refs such as `refs/heads/main` and
 `refs/tags/main`, so same-named branches and tags stay distinct.
 
 Freshness behavior:

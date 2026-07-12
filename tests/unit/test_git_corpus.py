@@ -181,6 +181,55 @@ def test_sync_with_narrower_request_keeps_stored_scope(tmp_path: Path) -> None:
     assert _has_ref(Path(narrowed.path), "refs/heads/release/1")
 
 
+def test_sync_resets_stored_scope_when_default_branch_changes(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path, "source", {"README.md": "main\n"})
+    _git(source, "checkout", "-q", "-b", "release/1")
+    _commit_file(source, "release.txt", "release\n", "release")
+    _git(source, "tag", "v1.0")
+    _git(source, "checkout", "-q", "main")
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    main_repo = _item("acme/api", source)
+
+    widened = cache.sync_repo(
+        main_repo,
+        root=root,
+        selector=RefSelector(profile="all", globs=("release/*", "v*")),
+        depth=1,
+        auth_header=None,
+    )
+    bare = Path(widened.path)
+    assert _has_ref(bare, "refs/heads/main")
+    assert _has_ref(bare, "refs/heads/release/1")
+    assert _has_ref(bare, "refs/tags/v1.0")
+
+    _git(source, "branch", "-m", "main", "trunk")
+    trunk_repo = CorpusRepoTarget(
+        full_name="acme/api",
+        clone_url=source.as_uri(),
+        default_branch="trunk",
+    )
+    refreshed = cache.sync_repo(
+        trunk_repo,
+        root=root,
+        selector=RefSelector(),
+        depth=1,
+        auth_header=None,
+    )
+
+    freshness = cache.repo_freshness(trunk_repo, root=root)
+    assert refreshed.profile == "default"
+    assert refreshed.ref_globs == ()
+    assert freshness is not None
+    assert freshness.profile == "default"
+    assert freshness.default_branch == "trunk"
+    assert freshness.ref_globs == ()
+    assert cache.local_refs(trunk_repo, root=root, selector=RefSelector()) == ("refs/heads/trunk",)
+    assert not _has_ref(bare, "refs/heads/main")
+    assert not _has_ref(bare, "refs/heads/release/1")
+    assert not _has_ref(bare, "refs/tags/v1.0")
+
+
 def test_first_tags_sync_also_caches_canonical_default_ref(tmp_path: Path) -> None:
     source = _source_repo(tmp_path, "source", {"README.md": "canonical default\n"})
     _git(source, "tag", "v1.0")
@@ -591,6 +640,40 @@ def test_grep_forces_extended_regex_despite_hostile_git_config(tmp_path: Path) -
     )
 
     assert [(hit.line, hit.text) for hit in hits] == [(1, "alpha"), (2, "beta")]
+
+
+@pytest.mark.parametrize("setting", ["color.ui", "color.grep"])
+def test_grep_disables_color_for_machine_parsing(tmp_path: Path, setting: str) -> None:
+    source = _source_repo(
+        tmp_path,
+        "source",
+        {"nested/workflow.yml": "uses: acme/action@v1\n"},
+    )
+    cache = GitCorpusCache()
+    root = tmp_path / "corpus"
+    repo = _item("acme/api", source)
+    synced = _sync_default(cache, repo, root=root)
+    _git(Path(synced.path), "config", setting, "always")
+
+    hits = cache.grep_ref(
+        repo,
+        root=root,
+        ref="refs/heads/main",
+        pattern="acme/action",
+        ignore_case=False,
+        fixed_strings=False,
+        word_regexp=False,
+    )
+
+    assert hits == (
+        GrepHit(
+            path="nested/workflow.yml",
+            line=1,
+            text="uses: acme/action@v1",
+            blob_oid=hits[0].blob_oid,
+        ),
+    )
+    assert hits[0].blob_oid
 
 
 def test_grep_content_modifiers_are_invocation_wide(tmp_path: Path) -> None:
