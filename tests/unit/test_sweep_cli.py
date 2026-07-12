@@ -97,6 +97,51 @@ def _capture_sweep(
     return captured
 
 
+def _forbid_sweep_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("sweep side effect reached")
+
+    monkeypatch.setattr("untaped_github.cli.sweep_commands.app_context", forbidden)
+    monkeypatch.setattr("untaped_github.cli.sweep_commands.read_identifiers", forbidden)
+    monkeypatch.setattr("untaped_github.cli.sweep_commands.open_client", forbidden)
+    monkeypatch.setattr("untaped_github.application.Sweep", forbidden)
+    monkeypatch.setattr("untaped_github.infrastructure.GitCorpusCache", forbidden)
+
+
+def test_columns_help_preflights_before_scope_and_sweep_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_sweep_side_effects(monkeypatch)
+
+    result = CliInvoker().invoke(
+        app,
+        ["sweep", "content", "TODO", "--columns", "?"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert result.stderr.startswith("available columns:\n  full_name\n")
+    assert "sweep requires" not in result.stderr
+
+
+def test_invalid_column_preflights_before_scope_and_sweep_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_sweep_side_effects(monkeypatch)
+
+    result = CliInvoker().invoke(
+        app,
+        ["sweep", "content", "TODO", "--columns", "matches.line"],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: unknown sweep column selector 'matches.line'; "
+        "use --columns ? to list valid selectors\n"
+    )
+    assert "sweep requires" not in result.stderr
+
+
 def test_content_builds_normalized_query_and_uses_config_tuning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

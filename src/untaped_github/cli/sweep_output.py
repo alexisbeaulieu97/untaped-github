@@ -34,13 +34,8 @@ def emit_sweep_report(
     columns: list[str] | None,
 ) -> None:
     """Write a sweep report using the format-specific public contract."""
-    if columns == ["?"]:
-        echo("available columns:", err=True)
-        for selector in SWEEP_COLUMN_SELECTORS:
-            echo(f"  {selector}", err=True)
+    if not preflight_sweep_output(fmt=fmt, columns=columns):
         return
-    if fmt != "pipe":
-        _validate_columns(columns)
     if fmt in ("json", "yaml"):
         emit(_structured_report(report, columns), fmt=fmt)
         return
@@ -58,6 +53,19 @@ def emit_sweep_report(
         )
         return
     raise NotImplementedError(f"sweep output format is not implemented: {fmt}")
+
+
+def preflight_sweep_output(*, fmt: OutputFormat, columns: list[str] | None) -> bool:
+    """Handle selector-only output behavior before running a sweep."""
+    if fmt == "pipe":
+        return True
+    if columns == ["?"]:
+        echo("available columns:", err=True)
+        for selector in SWEEP_COLUMN_SELECTORS:
+            echo(f"  {selector}", err=True)
+        return False
+    _validate_columns(columns)
+    return True
 
 
 def _validate_columns(columns: list[str] | None) -> None:

@@ -19,7 +19,7 @@ from untaped.api import (
 )
 
 from untaped_github.cli._client import open_client
-from untaped_github.cli.sweep_output import emit_sweep_report
+from untaped_github.cli.sweep_output import emit_sweep_report, preflight_sweep_output
 from untaped_github.settings import GithubSettings
 
 SCOPE = Group("Scope", sort_key=10)
@@ -322,15 +322,6 @@ def paths_command(
     require_complete: RequireCompleteOption = False,
 ) -> None:
     """Report tracked repository paths matching gitignore-style GLOB."""
-    has_content_constraint = any(
-        kind in ("with_content", "without_content") for kind, _value in constraint or ()
-    )
-    if not has_content_constraint and (
-        include_path or exclude_path or fixed_strings or ignore_case or word_regexp
-    ):
-        raise_usage(
-            "content matching options on sweep paths requires --with-content or --without-content"
-        )
     _run(
         question_kind="path",
         pattern=glob,
@@ -402,6 +393,17 @@ def _run(
     from untaped_github.infrastructure.git_corpus import git_auth_header  # noqa: PLC0415
 
     with report_errors():
+        if not preflight_sweep_output(fmt=fmt, columns=columns):
+            return
+        _validate_paths_content_options(
+            question_kind=question_kind,
+            constraints=constraints,
+            include_path=include_path,
+            exclude_path=exclude_path,
+            fixed_strings=fixed_strings,
+            ignore_case=ignore_case,
+            word_regexp=word_regexp,
+        )
         if refresh and cached:
             raise_usage("--refresh and --cached are mutually exclusive")
         orgs = tuple(org or ())
@@ -499,6 +501,29 @@ def _run(
         _status(report)
         finish(
             (fail_on_match and bool(report.results)) or (require_complete and bool(report.failures))
+        )
+
+
+def _validate_paths_content_options(
+    *,
+    question_kind: Literal["content", "path"],
+    constraints: list[ConstraintInput] | None,
+    include_path: list[str] | None,
+    exclude_path: list[str] | None,
+    fixed_strings: bool,
+    ignore_case: bool,
+    word_regexp: bool,
+) -> None:
+    has_content_constraint = any(
+        kind in ("with_content", "without_content") for kind, _value in constraints or ()
+    )
+    if (
+        question_kind == "path"
+        and not has_content_constraint
+        and (include_path or exclude_path or fixed_strings or ignore_case or word_regexp)
+    ):
+        raise_usage(
+            "content matching options on sweep paths requires --with-content or --without-content"
         )
 
 

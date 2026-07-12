@@ -253,6 +253,20 @@ def test_pipe_ignores_columns_and_emits_complete_result_records(
     ]
 
 
+def test_pipe_ignores_columns_question_mark(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    report = _report()
+
+    emit_sweep_report(report, fmt="pipe", columns=["?"])
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert [json.loads(line)["record"] for line in captured.out.splitlines()] == [
+        result.to_dict() for result in report.results
+    ]
+
+
 def test_columns_question_mark_lists_exact_nested_selectors(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

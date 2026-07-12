@@ -221,7 +221,8 @@ stderr. Output on stdout is format-specific:
 - Raw emits one row per matching repository. Without columns it emits unique
   `full_name` values; nested match columns are ordered arrays.
 - Pipe emits one complete `github.sweep_result` record per result and ignores
-  `--columns`, so it remains safe as downstream sweep scope.
+  every `--columns` value, including `?`, so it remains safe as downstream
+  sweep scope.
 
 For example, `--format json` produces an archival report rather than a bare
 row list:
@@ -251,8 +252,9 @@ row list:
 }
 ```
 
-Use `--columns ?` to list selectors. Content evidence may include clipped
-source context with `--context N`; the option is content-primary-only.
+Use `--columns ?` with a non-pipe format to list selectors without running a
+sweep. Content evidence may include clipped source context with `--context N`;
+the option is content-primary-only.
 CODEOWNERS is resolved per qualifying ref for primary-evidence paths only.
 
 Default exit code is `0` for no matches, matches, and declared partial

@@ -213,6 +213,55 @@ def test_scope_is_required(configured: None) -> None:
     assert "--org, --team, --repo, or --stdin" in result.output
 
 
+@pytest.mark.parametrize(
+    ("columns", "expected", "exit_code"),
+    [
+        ("?", "available columns:", 0),
+        ("matches.line", "unknown sweep column selector 'matches.line'", 2),
+    ],
+)
+def test_non_pipe_selector_preflight_precedes_paths_content_option_validation(
+    columns: str,
+    expected: str,
+    exit_code: int,
+) -> None:
+    result = CliInvoker().invoke(
+        app,
+        ["sweep", "paths", "*.py", "--fixed-strings", "--columns", columns],
+    )
+
+    assert result.exit_code == exit_code
+    assert expected in result.output
+    assert "requires --with-content or --without-content" not in result.output
+
+
+@pytest.mark.parametrize("columns", ["?", "matches.line"])
+def test_pipe_ignores_columns_before_paths_content_option_validation(
+    configured: None,
+    columns: str,
+) -> None:
+    result = CliInvoker().invoke(
+        app,
+        [
+            "sweep",
+            "paths",
+            "*.py",
+            "--repo",
+            "acme/api",
+            "--fixed-strings",
+            "--format",
+            "pipe",
+            "--columns",
+            columns,
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "requires --with-content or --without-content" in result.output
+    assert "available columns" not in result.output
+    assert "unknown sweep column selector" not in result.output
+
+
 def test_refresh_and_cached_are_mutually_exclusive(configured: None) -> None:
     result = CliInvoker().invoke(
         app,
