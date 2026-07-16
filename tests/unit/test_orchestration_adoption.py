@@ -18,6 +18,9 @@ HISTORICAL_OID = "045fed8bf1c240b8a93bd7a25389cfbe38f0bc8d"
 HISTORICAL_SHA = "5eb07d2b3dad622e943a80a6be77e8d9d716336b7c96600d686ccc8985eee547"
 OWNER_REPOSITORY = "alexisbeaulieu97/untaped-orchestration"
 OWNER_SECTION = "docs/superpowers/specs/2026-07-09-orchestration-v1-design.md#16.1"
+OWNER_PR_URL = "https://github.com/alexisbeaulieu97/untaped-orchestration/pull/5"
+OWNER_MERGE_OID = "390271b175514685884e35a87a83c6dd7fa2c96a"
+CORRECTED_DESIGN_SHA256 = "44ed8ff16da38e66223d1c9350136d763b7f3e6bc62eae5614a04487dadf529b"
 CORE_DECISIONS_URL = "https://github.com/alexisbeaulieu97/untaped/blob/main/docs/decisions.md"
 SWEEP_SPEC = "superpowers/specs/2026-07-10-sweep-ux-redesign-design.md"
 DECISION_IDS = (
@@ -176,7 +179,7 @@ def test_exact_ten_decisions_preserve_titles_bodies_and_evidence() -> None:
     assert all(decision_id in view for decision_id in DECISION_IDS)
 
 
-def test_migration_coverage_is_exact_gapless_and_pending_independent_review() -> None:
+def test_migration_coverage_is_exact_gapless_and_independently_accepted() -> None:
     coverage = load_toml(MIGRATION / "coverage.toml")
     assert coverage["schema"] == "untaped.orchestration.coverage/v1"
     assert coverage["source_repository"] == "untaped-github"
@@ -189,7 +192,8 @@ def test_migration_coverage_is_exact_gapless_and_pending_independent_review() ->
     assert [block["line_range"] for block in blocks] == list(RANGES)
     assert [block["source_bytes"] for block in blocks] == list(BYTE_COUNTS)
     assert [block["block_sha256"] for block in blocks] == list(BLOCK_HASHES)
-    assert {block["review_status"] for block in blocks} == {"pending-review"}
+    assert {block["review_status"] for block in blocks} == {"accepted"}
+    assert {block["review_reference"] for block in blocks} == {"review.md"}
     assert all(block["disposition"] and block["destination"] for block in blocks)
     lines = [line for block in blocks for line in inclusive(block["line_range"])]
     assert lines == list(range(1, 202))
@@ -211,7 +215,13 @@ def test_migration_coverage_is_exact_gapless_and_pending_independent_review() ->
             "status": "historical",
         },
     ]
-    assert not (MIGRATION / "review.md").exists()
+    review = (MIGRATION / "review.md").read_text(encoding="utf-8")
+    assert "## Verdict: ACCEPT" in review
+    assert "Independent reviewer: Codex review subagent `github_adoption_reviewer`" in review
+    assert (
+        "325f5c5f9ac3977838f46ab1555824e1d7746a2e..b67d0e33edf56839e224d691171ed065d2154641"
+    ) in review
+    assert SOURCE_SHA in review
 
 
 def test_import_manifest_has_guarded_unique_ten_records() -> None:
@@ -230,7 +240,7 @@ def test_import_manifest_has_guarded_unique_ten_records() -> None:
     assert record_ids == list(DECISION_IDS)
 
 
-def test_historical_pilot_is_superseded_and_owner_correction_is_pending() -> None:
+def test_historical_pilot_is_superseded_and_owner_correction_is_landed() -> None:
     historical = load_toml(MIGRATION / "historical-inputs.toml")
     assert historical["schema"] == "untaped.orchestration.historical-inputs/v1"
     assert len(historical["historical_inputs"]) == 1
@@ -256,10 +266,10 @@ def test_historical_pilot_is_superseded_and_owner_correction_is_pending() -> Non
             "superseded-by-current-source only"
         ),
         "merge_gate": "untaped-github-adoption-before-merge",
-        "status": "pending-owner-pr",
-        "owner_pr_url": "",
-        "owner_merge_oid": "",
-        "corrected_design_blob_sha256": "",
+        "status": "landed",
+        "owner_pr_url": OWNER_PR_URL,
+        "owner_merge_oid": OWNER_MERGE_OID,
+        "corrected_design_blob_sha256": CORRECTED_DESIGN_SHA256,
     }
 
 

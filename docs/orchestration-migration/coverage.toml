@@ -28,7 +28,8 @@ source_bytes = 722
 block_sha256 = "73c61e2f549ec540fa5aad13a377b2d882bbfc01e67a0f227100399d5bd960cc"
 disposition = "replaced-by-pointer-with-authority-retained"
 destination = "docs/decisions.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "13-33"
@@ -36,7 +37,8 @@ source_bytes = 1322
 block_sha256 = "d0579a8d51d3687b338888793c1f7009edec3cbd3cd7a0604d78216a263e4ae8"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd288376be90c3a91edf4de3ae-sweep-is-question-first-over-a-local-corpus-the-corpus-is-the-en.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "34-34"
@@ -44,7 +46,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "35-46"
@@ -52,7 +55,8 @@ source_bytes = 677
 block_sha256 = "e27f12dafc3d4f4c2905e0a0c1d8a89d1a2ec20c45737c681420625bfa199a70"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2998705397269fc0ae93e201-the-primary-target-is-explicit-in-a-subcommand.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "47-47"
@@ -60,7 +64,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "48-60"
@@ -68,7 +73,8 @@ source_bytes = 839
 block_sha256 = "e1fb9bc19ea21a6307643ad196405ceeffc0270d141a922615157ea64dba38ca"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2aa2734a8cd98a5d349d7126-one-primary-question-plus-conjunctive-same-ref-constraints-no-bo.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "61-61"
@@ -76,7 +82,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "62-81"
@@ -84,7 +91,8 @@ source_bytes = 1124
 block_sha256 = "402571301c1c81f7360d475c6656800558ff7cc2d01d5f1a936f92e445f83a73"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2bb1731e8ca4a9c4e02bf186-content-and-paths-have-explicit-portable-pattern-languages.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "82-82"
@@ -92,7 +100,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "83-117"
@@ -100,7 +109,8 @@ source_bytes = 2235
 block_sha256 = "105a14e685c1a640e8acf8154724d5def2d9d7608ecf3ec4239fe6f1f85dd94f"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2cb974ae99ab5a92c607923a-a-sweep-has-one-complete-report-model-with-explicit-output-proje.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "118-118"
@@ -108,7 +118,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "119-129"
@@ -116,7 +127,8 @@ source_bytes = 600
 block_sha256 = "e1033cf2152f81abc2cdb1f346d55dd23307060e890d53a54fe407c6ac236e79"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2dc07759a258750734219002-canonical-refs-survive-selection-evaluation-grouping-and-reporti.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "130-130"
@@ -124,7 +136,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "131-143"
@@ -132,7 +145,8 @@ source_bytes = 742
 block_sha256 = "d90f8d537d35694c3f96f2a5fc7fe90de1df4b806e14cbe3ed64a1c7c1fc834f"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2ec570968ea51252829366e6-depth-concurrency-and-max-age-are-configuration-only-tuning.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "144-144"
@@ -140,7 +154,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "145-171"
@@ -148,7 +163,8 @@ source_bytes = 1728
 block_sha256 = "2d426873e213b2eb0bfa7b14db2e0bbda6e78a8071bb0685fbf934b2f8d11fd4"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd2fd7769f841b09dd5a9f6d94-the-corpus-is-a-self-managing-content-cache-not-a-development-wo.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "172-172"
@@ -156,7 +172,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "173-185"
@@ -164,7 +181,8 @@ source_bytes = 747
 block_sha256 = "810e6d8198f8321a4103e51856f2b7aea465ed32449687ea2be5e502d22ef811"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd30df76bcaa23ac2ea45728cb-fleet-standard-exit-codes-use-explicit-match-and-completeness-ga.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "186-186"
@@ -172,7 +190,8 @@ source_bytes = 1
 block_sha256 = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
 disposition = "source-separator-omitted"
 destination = "none"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
 
 [[blocks]]
 line_range = "187-201"
@@ -180,4 +199,5 @@ source_bytes = 795
 block_sha256 = "49d3fafbec10e6a5f03ca7e9129875a2fcc1555ae18d63ca99a98537e5d6c58d"
 disposition = "migrated"
 destination = "decisions/dec_019f68bd31e7766fa7c3615a0e43663d-git-subprocess-adapters-must-never-inherit-the-cli-s-stdio.md"
-review_status = "pending-review"
+review_status = "accepted"
+review_reference = "review.md"
