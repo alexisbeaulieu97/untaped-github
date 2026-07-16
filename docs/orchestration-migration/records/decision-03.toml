@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd2aa2734a8cd98a5d349d7126"
+kind = "decision"
+title = "One primary question plus conjunctive same-ref constraints — no boolean mode"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []

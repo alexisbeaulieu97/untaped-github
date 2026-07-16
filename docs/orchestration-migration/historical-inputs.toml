@@ -1,0 +1,24 @@
+schema = "untaped.orchestration.historical-inputs/v1"
+
+[[historical_inputs]]
+source_oid = "045fed8bf1c240b8a93bd7a25389cfbe38f0bc8d"
+original_path = "docs/decisions.md"
+source_sha256 = "5eb07d2b3dad622e943a80a6be77e8d9d716336b7c96600d686ccc8985eee547"
+source_bytes = 6268
+source_lines = 107
+decision_count = 5
+disposition = "superseded-by-current-source"
+current_source_oid = "325f5c5f9ac3977838f46ab1555824e1d7746a2e"
+current_source_sha256 = "b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+canonical_record_store_or_decision_ids = false
+canonicality = "No old record, store, or decision ID is canonical."
+
+[normative_owner_follow_up]
+owner_repository = "alexisbeaulieu97/untaped-orchestration"
+owner_section = "docs/superpowers/specs/2026-07-09-orchestration-v1-design.md#16.1"
+required_correction = "ten GitHub decisions from the current source OID/hash; old pilot is superseded-by-current-source only"
+merge_gate = "untaped-github-adoption-before-merge"
+status = "pending-owner-pr"
+owner_pr_url = ""
+owner_merge_oid = ""
+corrected_design_blob_sha256 = ""

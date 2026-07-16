@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd2fd7769f841b09dd5a9f6d94"
+kind = "decision"
+title = "The corpus is a self-managing content cache, not a development workspace"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []

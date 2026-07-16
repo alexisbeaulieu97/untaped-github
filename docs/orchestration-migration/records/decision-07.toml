@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd2ec570968ea51252829366e6"
+kind = "decision"
+title = "Depth, concurrency, and max age are configuration-only tuning"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []

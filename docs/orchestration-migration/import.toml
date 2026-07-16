@@ -1,0 +1,64 @@
+schema = "untaped.orchestration.import/v1"
+target_store_id = "sto_019f68bd27717789ac94b7746ec6b75a"
+expected_store_revision = "sha256:000dd48771408bfabffe97ac5b3e0bda5da64f72ad140063d5e7b8d0dcc0e5ca"
+require_empty_items = true
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-01.toml"
+body_file = "records/decision-01.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-02.toml"
+body_file = "records/decision-02.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-03.toml"
+body_file = "records/decision-03.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-04.toml"
+body_file = "records/decision-04.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-05.toml"
+body_file = "records/decision-05.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-06.toml"
+body_file = "records/decision-06.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-07.toml"
+body_file = "records/decision-07.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-08.toml"
+body_file = "records/decision-08.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-09.toml"
+body_file = "records/decision-09.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"
+
+[[records]]
+destination = "decisions"
+frontmatter_file = "records/decision-10.toml"
+body_file = "records/decision-10.md"
+source_ref = "git:325f5c5f9ac3977838f46ab1555824e1d7746a2e:docs/decisions.md#sha256:b5cb8187398af4fee52b720c6890129f602c33d8c8c44c38b646c5b45d18f3ce"

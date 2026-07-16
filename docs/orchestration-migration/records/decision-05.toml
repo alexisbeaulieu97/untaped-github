@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd2cb974ae99ab5a92c607923a"
+kind = "decision"
+title = "A sweep has one complete report model with explicit output projections"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []
