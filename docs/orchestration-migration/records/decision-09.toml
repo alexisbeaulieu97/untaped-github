@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd30df76bcaa23ac2ea45728cb"
+kind = "decision"
+title = "Fleet-standard exit codes use explicit match and completeness gates"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []

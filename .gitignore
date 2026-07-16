@@ -21,3 +21,12 @@ htmlcov/
 
 # Editor noise
 .DS_Store
+.untaped/orchestration/**/.lock
+.untaped/orchestration/**/.DS_Store
+.untaped/orchestration/**/.*.untaped-tmp-*
+.untaped/orchestration/**/*~
+.untaped/orchestration/**/*.swp
+.untaped/orchestration/**/*.swo
+.untaped/orchestration/**/*.tmp
+.untaped/orchestration/**/.#*
+.untaped/orchestration/**/#*

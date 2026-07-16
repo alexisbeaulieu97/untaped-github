@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd2998705397269fc0ae93e201"
+kind = "decision"
+title = "The primary target is explicit in a subcommand"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []

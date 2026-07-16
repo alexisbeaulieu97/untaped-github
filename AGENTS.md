@@ -42,6 +42,15 @@ machinery.
    must use the `github` section, bearer-token auth, the configured base URL,
    and the SDK-resolved TLS policy; never hard-code TLS verification policy.
 
+## Orchestration decisions
+
+This repository has a public decision-only orchestration store. There are no tasks.
+Agents start with `untaped-orchestration brief --format json`, use CLI
+reads and revision guards for canonical mutations, and never use
+`--force-current`. Generated views are human-only navigation, not tool input.
+After hand recovery, run `untaped-orchestration check --local` and
+`untaped-orchestration render --check` before continuing.
+
 ## Release Workflow
 
 `untaped-github` publishes to TestPyPI and PyPI from

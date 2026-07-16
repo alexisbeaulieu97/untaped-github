@@ -1,0 +1,6 @@
+schema = "untaped.orchestration.decision/v1"
+id = "dec_019f68bd2bb1731e8ca4a9c4e02bf186"
+kind = "decision"
+title = "Content and paths have explicit, portable pattern languages"
+created_at = "2026-07-12T13:22:03.000Z"
+tags = []
